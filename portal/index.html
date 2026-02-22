@@ -783,6 +783,16 @@
       const refreshLatencyBtn = document.getElementById('refresh-latency');
       const latencyGrid = document.getElementById('latency-grid');
       const latencyModeStorageKey = 'latencyMode';
+      const defaultLatencySites = [
+        { key: 'youtube', name: 'YouTube' },
+        { key: 'github', name: 'GitHub' },
+        { key: 'tmdb', name: 'TMDB' },
+        { key: 'baidu', name: '百度' }
+      ];
+      const latencyCache = {
+        browser: [],
+        router: []
+      };
       let latencyRefreshing = false;
       let latencyMode = localStorage.getItem(latencyModeStorageKey);
       if (latencyMode !== 'router' && latencyMode !== 'browser') {
@@ -810,24 +820,21 @@
         return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5.2" r="2.3" fill="#2563eb"></circle><circle cx="6.8" cy="8.8" r="2.1" fill="#2563eb"></circle><circle cx="17.2" cy="8.8" r="2.1" fill="#2563eb"></circle><ellipse cx="12" cy="15.4" rx="5.1" ry="4.2" fill="#2563eb"></ellipse></svg>';
       };
 
-      const renderLatencyItems = (sites = [], pending = false) => {
-        if (!sites.length && !pending) {
-          latencyGrid.innerHTML = '';
-          return;
+      const renderLatencyItems = (sites = [], pending = false, mode = latencyMode) => {
+        if (!sites.length) {
+          sites = latencyCache[mode];
         }
         if (!sites.length) {
-          sites = [
-            { key: 'youtube', name: 'YouTube' },
-            { key: 'github', name: 'GitHub' },
-            { key: 'tmdb', name: 'TMDB' },
-            { key: 'baidu', name: '百度' }
-          ];
-          pending = true;
+          sites = defaultLatencySites;
         }
         latencyGrid.innerHTML = sites.map((site) => {
           const latency = Number(site.latencyMs);
-          const latencyText = pending ? '检测中' : (latency >= 0 ? `${latency} ms` : '超时');
-          const statusColor = pending ? '#94a3b8' : (site.reachable ? '#16a34a' : '#ef4444');
+          const hasLatency = Number.isFinite(latency) && latency >= 0;
+          const reachable = typeof site.reachable === 'boolean' ? site.reachable : null;
+          const latencyText = pending ? '检测中' : (hasLatency ? `${latency} ms` : (reachable === false ? '超时' : '检测中'));
+          const statusColor = pending
+            ? '#94a3b8'
+            : (hasLatency || reachable === true ? '#16a34a' : (reachable === false ? '#ef4444' : '#94a3b8'));
           const logo = latencyLogoSvg(site.key);
           return `
             <div class="latency-card">
@@ -1075,16 +1082,24 @@
         }
       };
 
-      const fetchLatency = async () => {
-        const jsonPath = latencyMode === 'router' ? '/latency-router.json' : '/latency-browser.json';
+      const fetchLatency = async (mode = latencyMode) => {
+        const jsonPath = mode === 'router' ? '/latency-router.json' : '/latency-browser.json';
         try {
           const res = await fetch(`${jsonPath}?t=${Date.now()}`, { cache: 'no-store' });
           if (!res.ok) throw new Error('latency');
           const data = await res.json();
-          renderLatencyItems(Array.isArray(data.sites) ? data.sites : [], false);
+          const sites = Array.isArray(data.sites) ? data.sites : [];
+          if (sites.length) {
+            latencyCache[mode] = sites;
+          }
+          if (mode === latencyMode) {
+            renderLatencyItems(sites, false, mode);
+          }
           return data;
         } catch (err) {
-          renderLatencyItems([], false);
+          if (mode === latencyMode) {
+            renderLatencyItems([], false, mode);
+          }
           return null;
         }
       };
@@ -1129,30 +1144,33 @@
 
       const triggerLatencyRefresh = async () => {
         if (latencyRefreshing || refreshLatencyBtn.disabled) return;
+        const refreshMode = latencyMode;
         latencyRefreshing = true;
         refreshLatencyBtn.disabled = true;
         try {
-          const refreshPath = latencyMode === 'router' ? '/latency-router-refresh' : '/latency-browser-refresh';
+          const refreshPath = refreshMode === 'router' ? '/latency-router-refresh' : '/latency-browser-refresh';
           const res = await fetchWithAuth(refreshPath, { method: 'PUT', body: '1' });
           if (!res.ok) throw new Error('latency-refresh');
-          renderLatencyItems([], true);
+          if (refreshMode === latencyMode) {
+            renderLatencyItems([], true, refreshMode);
+          }
         } catch (err) {
           latencyRefreshing = false;
           refreshLatencyBtn.disabled = false;
-          await fetchLatency();
+          await fetchLatency(refreshMode);
           return;
         }
         let hasData = false;
         for (let i = 0; i < 12; i += 1) {
           await sleep(1000);
-          const data = await fetchLatency();
+          const data = await fetchLatency(refreshMode);
           if (data && Array.isArray(data.sites) && data.sites.length > 0) {
             hasData = true;
             break;
           }
         }
-        if (!hasData) {
-          renderLatencyItems([], false);
+        if (!hasData && refreshMode === latencyMode) {
+          renderLatencyItems([], false, refreshMode);
         }
         latencyRefreshing = false;
         refreshLatencyBtn.disabled = false;
