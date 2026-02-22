@@ -646,7 +646,6 @@
                 <div className="error" id="admin-error" style=${{ display: 'none' }}></div>
               </div>
               <div className="modal-actions">
-                <button className="rounded-lg border px-3 py-1.5 text-xs" style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }} id="admin-cancel">取消</button>
                 <button className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-white" style=${{ borderColor: 'var(--accent-strong)', background: 'var(--accent-strong)' }} id="admin-confirm">确认</button>
               </div>
             </div>
@@ -704,35 +703,37 @@
       const info = document.getElementById('info');
       const hostPort = `${host}:${dashPort}`;
 
-      const rows = [
-        { label: '控制地址', value: `${protocol}://${hostPort}` },
-        { label: 'HTTP', value: httpPort },
-        { label: 'SOCKS', value: socksPort },
-        { label: 'TPROXY', value: tproxyPort },
-        { label: 'Mixed', value: mixedPort },
-        { label: 'Secret', value: secret || '未设置' }
-      ];
+      const fillConnectionInfo = () => {
+        const rows = [
+          { label: '控制地址', value: `${protocol}://${hostPort}` },
+          { label: 'HTTP', value: httpPort },
+          { label: 'SOCKS', value: socksPort },
+          { label: 'TPROXY', value: tproxyPort },
+          { label: 'Mixed', value: mixedPort },
+          { label: 'Secret', value: secret || '未设置' }
+        ];
 
-      info.innerHTML = rows
-        .map((item) => `<div class="kv"><span>${item.label}</span><strong>${item.value}</strong></div>`)
-        .join('');
+        info.innerHTML = rows
+          .map((item) => `<div class="kv"><span>${item.label}</span><strong>${item.value}</strong></div>`)
+          .join('');
 
-      const baseQuery = new URLSearchParams({
-        http: 'true',
-        hostname: host,
-        port: dashPort,
-        secret: secret
-      });
+        const baseQuery = new URLSearchParams({
+          http: 'true',
+          hostname: host,
+          port: dashPort,
+          secret: secret
+        });
 
-      const yacdQuery = new URLSearchParams({
-        hostname: host,
-        port: dashPort,
-        secret: secret
-      });
+        const yacdQuery = new URLSearchParams({
+          hostname: host,
+          port: dashPort,
+          secret: secret
+        });
 
-      document.getElementById('link-metacubexd').href = `${protocol}://${hostPort}/ui/metacubexd/#/setup?${baseQuery.toString()}`;
-      document.getElementById('link-zashboard').href = `${protocol}://${hostPort}/ui/zashboard/#/setup?${baseQuery.toString()}`;
-      document.getElementById('link-yacd').href = `${protocol}://${hostPort}/ui/yacd/?${yacdQuery.toString()}`;
+        document.getElementById('link-metacubexd').href = `${protocol}://${hostPort}/ui/metacubexd/#/setup?${baseQuery.toString()}`;
+        document.getElementById('link-zashboard').href = `${protocol}://${hostPort}/ui/zashboard/#/setup?${baseQuery.toString()}`;
+        document.getElementById('link-yacd').href = `${protocol}://${hostPort}/ui/yacd/?${yacdQuery.toString()}`;
+      };
 
       const mixedProxyEl = document.getElementById('mixed-proxy');
       const mixedProxyUrl = `http://${host}:${mixedPort}`;
@@ -853,7 +854,6 @@
       const adminBackdrop = document.getElementById('admin-backdrop');
       const adminKeyInput = document.getElementById('admin-key');
       const adminConfirm = document.getElementById('admin-confirm');
-      const adminCancel = document.getElementById('admin-cancel');
       const adminError = document.getElementById('admin-error');
       let adminResolve = null;
       let adminPromptPromise = null;
@@ -905,18 +905,13 @@
         }
         adminPromptPromise = null;
       };
-      const cancelAdminKey = () => {
-        closeAdminModal();
-        if (adminResolve) {
-          adminResolve(false);
-          adminResolve = null;
-        }
-        adminPromptPromise = null;
-      };
 
       adminConfirm.addEventListener('click', submitAdminKey);
-      adminCancel.addEventListener('click', cancelAdminKey);
-      adminBackdrop.addEventListener('click', cancelAdminKey);
+      adminBackdrop.addEventListener('click', () => {
+        adminError.textContent = '请输入管理密钥后继续。';
+        adminError.style.display = 'block';
+        setTimeout(() => adminKeyInput.focus(), 0);
+      });
       adminKeyInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           submitAdminKey();
@@ -1096,12 +1091,6 @@
 
       const triggerUpdate = async () => {
         if (updateBtn.disabled) return;
-        if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey)) {
-          const ok = await requestAdminKey();
-          if (!ok) {
-            return;
-          }
-        }
         updateBtn.disabled = true;
         updateBtn.style.opacity = '0.55';
         updateBtn.title = '更新中...';
@@ -1140,12 +1129,6 @@
 
       const triggerLatencyRefresh = async () => {
         if (latencyRefreshing || refreshLatencyBtn.disabled) return;
-        if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey)) {
-          const ok = await requestAdminKey();
-          if (!ok) {
-            return;
-          }
-        }
         latencyRefreshing = true;
         refreshLatencyBtn.disabled = true;
         try {
@@ -1253,10 +1236,6 @@
       };
 
       const refreshSubscriptionsUI = async () => {
-        if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey)) {
-          updateBtn.disabled = false;
-          return { urls: [], active: 0, authRequired: true, loaded: false };
-        }
         const data = await loadSubscriptions();
         if (data.authRequired) {
           updateBtn.disabled = false;
@@ -1278,9 +1257,6 @@
         for (let i = 0; i < 8; i += 1) {
           const data = await refreshSubscriptionsUI();
           lastData = data;
-          if (data.authRequired) {
-            return data;
-          }
           if (data.loaded) {
             return data;
           }
@@ -1291,12 +1267,6 @@
       };
 
       openSubs.addEventListener('click', async () => {
-        if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey)) {
-          const ok = await requestAdminKey();
-          if (!ok) {
-            return;
-          }
-        }
         const data = await refreshSubscriptionsUI();
         if (data.authRequired) {
           return;
@@ -1452,12 +1422,6 @@
       });
 
       openSettings.addEventListener('click', async () => {
-        if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey)) {
-          const ok = await requestAdminKey();
-          if (!ok) {
-            return;
-          }
-        }
         const settingsState = await loadSettings();
         if (settingsState.authRequired) {
           return;
@@ -1481,7 +1445,20 @@
       closeAbout.addEventListener('click', closeAboutModal);
       aboutBackdrop.addEventListener('click', closeAboutModal);
 
-      bootstrapSubscriptionsUI().then((data) => {
+      const ensureAdminSession = async () => {
+        if (!adminAuthEnabled) return;
+        while (true) {
+          const res = await fetchWithAuth(`/settings.json?t=${Date.now()}`, { cache: 'no-store' });
+          if (res.status !== 401 && res.status !== 403) {
+            return;
+          }
+        }
+      };
+
+      const bootstrapPortal = async () => {
+        await ensureAdminSession();
+        fillConnectionInfo();
+        const data = await bootstrapSubscriptionsUI();
         if (data.loaded && !data.authRequired && !data.urls.length) {
           subsText.value = '';
           setActiveOptions([], 0);
@@ -1489,15 +1466,17 @@
           subsError.style.display = 'block';
           openSubsModal(true);
         }
-      });
-      applyLatencyModeUI();
-      fetchStatus();
-      fetchSubscriptionInfo();
-      fetchCoreVersion();
-      triggerLatencyRefresh();
-      setInterval(fetchStatus, 30000);
-      setInterval(renderLastUpdate, 60000);
-      setInterval(triggerLatencyRefresh, 30000);
+        applyLatencyModeUI();
+        fetchStatus();
+        fetchSubscriptionInfo();
+        fetchCoreVersion();
+        triggerLatencyRefresh();
+        setInterval(fetchStatus, 30000);
+        setInterval(renderLastUpdate, 60000);
+        setInterval(triggerLatencyRefresh, 30000);
+      };
+
+      bootstrapPortal();
     </script>
   </body>
 </html>
