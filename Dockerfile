@@ -1,11 +1,3 @@
-FROM node:22.18.0-alpine3.22 AS yacd-build
-
-WORKDIR /app
-COPY ui/yacd/package.json ui/yacd/pnpm-lock.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile
-COPY ui/yacd/ .
-RUN pnpm build
-
 FROM debian:12-slim
 
 # 切换 APT 源为 USTC（Debian 12 / bookworm，.sources 格式）
@@ -26,10 +18,18 @@ RUN sed -i 's@deb.debian.org@mirrors.ustc.edu.cn@g' /etc/apt/sources.list.d/debi
 COPY clash /usr/bin/clash
 
 # UI（external-ui）
-RUN mkdir -p /opt/ui /opt/portal
-COPY ui/metacubexd /opt/ui/metacubexd
-COPY ui/zashboard /opt/ui/zashboard
-COPY --from=yacd-build /app/public /opt/ui/yacd
+ARG METACUBEXD_REPO="MetaCubeX/metacubexd"
+ARG METACUBEXD_REF="gh-pages"
+ARG ZASHBOARD_REPO="Zephyruso/zashboard"
+ARG ZASHBOARD_REF="gh-pages"
+ARG YACD_REPO="MetaCubeX/Yacd-meta"
+ARG YACD_REF="gh-pages"
+
+RUN set -eux; \
+    mkdir -p /opt/ui/metacubexd /opt/ui/zashboard /opt/ui/yacd /opt/portal; \
+    curl -fsSL "https://codeload.github.com/${METACUBEXD_REPO}/tar.gz/refs/heads/${METACUBEXD_REF}" | tar -xzf - -C /opt/ui/metacubexd --strip-components=1; \
+    curl -fsSL "https://codeload.github.com/${ZASHBOARD_REPO}/tar.gz/refs/heads/${ZASHBOARD_REF}" | tar -xzf - -C /opt/ui/zashboard --strip-components=1; \
+    curl -fsSL "https://codeload.github.com/${YACD_REPO}/tar.gz/refs/heads/${YACD_REF}" | tar -xzf - -C /opt/ui/yacd --strip-components=1
 
 # 快捷入口页面
 COPY portal/index.html /opt/portal/index.html
