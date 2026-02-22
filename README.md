@@ -1,0 +1,89 @@
+# Clash Meta Docker
+
+一个开箱即用的 Clash Meta（mihomo）容器方案。
+
+你只需要启动容器、填入订阅，就可以通过统一 Portal 完成配置、更新和状态查看，不需要手动改一堆配置文件。
+
+## 这是什么
+
+这个项目把 Clash Meta 的日常使用流程做成了一个完整产品化体验：
+
+- 内置 Portal 管理页面，先用再折腾
+- 内置多套 Web UI（metacubexd / zashboard / yacd）
+- 自动处理 geodata 下载、配置校验和失败回滚
+- 支持定时更新与手动更新，减少断流和重启循环
+
+## 3 分钟上手
+
+1. 启动服务
+
+```bash
+docker compose up -d
+```
+
+2. 打开 Portal
+
+- `http://localhost:9090`
+
+3. 填写订阅地址并保存
+
+保存后会自动生成并应用配置，随后即可在面板中使用。
+
+## 默认端口
+
+- `9090`: Portal
+- `9097`: Clash API / Dashboard
+- `7890`: HTTP 代理
+- `7891`: SOCKS5 代理
+- `7892`: TPROXY
+- `7893`: MIXED
+
+如需调整，可在 `docker-compose.yml` 中修改环境变量。
+
+## 镜像来源
+
+默认 `docker-compose.yml` 使用：
+
+- `ghcr.nju.edu.cn/bctjo/docker-clash:latest`
+
+## 为什么更稳定
+
+容器启动与更新流程包含以下保护机制：
+
+- geodata 预下载（`Country.mmdb` / `GeoSite.dat` / `GeoIP.dat`）
+- 配置应用前执行 `clash -t` 校验
+- 下载失败自动重试与多源回退
+- 更新失败自动回滚到可用文件
+
+这可以明显降低“配置更新后服务起不来”的概率。
+
+## 常用配置项
+
+你通常只需要关心这几个：
+
+- `SUBSCR_URLS`: 订阅地址（逗号分隔）
+- `PORTAL_ADMIN_KEY`: Portal 管理密码
+- `UPDATE_INTERVAL`: 自动更新间隔（秒，默认 43200）
+- `CLASH_SECRET`: API 密钥（为空会自动生成）
+
+更多配置可查看 `docker-compose.yml`。
+
+## 数据持久化
+
+项目将运行数据保存在 `data/` 目录，包含：
+
+- 运行配置与原始订阅配置
+- geodata 文件
+- Portal 设置、订阅和状态
+
+迁移或备份时保留该目录即可。
+
+## 本地构建（可选）
+
+如果你想自己构建镜像：
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+这个文件使用 bridge + 显式端口映射，适合本地开发测试。

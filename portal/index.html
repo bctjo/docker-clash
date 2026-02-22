@@ -1,0 +1,1503 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clash Portal</title>
+    <script src="./config.js"></script>
+    <script src="./vendor/tailwindcss-cdn.js"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['"IBM Plex Sans"', '"Noto Sans"', '"Segoe UI"', 'sans-serif'],
+              mono: ['"JetBrains Mono"', '"SFMono-Regular"', 'Menlo', 'monospace']
+            }
+          }
+        }
+      };
+    </script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f8fafc;
+        --bg-soft: #f1f5f9;
+        --panel: #ffffff;
+        --panel-soft: #f8fafc;
+        --text: #0f172a;
+        --muted: #64748b;
+        --accent: #2563eb;
+        --accent-strong: #1d4ed8;
+        --border: #e2e8f0;
+        --ring: rgba(37, 99, 235, 0.28);
+        --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.04);
+        --shadow-lg: 0 20px 50px rgba(15, 23, 42, 0.12);
+      }
+      [data-theme="dark"] {
+        --bg: #020617;
+        --bg-soft: #0b1120;
+        --panel: #0f172a;
+        --panel-soft: #111827;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #60a5fa;
+        --accent-strong: #3b82f6;
+        --border: rgba(255, 255, 255, 0.1);
+        --ring: rgba(96, 165, 250, 0.35);
+        --shadow-sm: 0 1px 2px rgba(2, 6, 23, 0.45), 0 14px 36px rgba(2, 6, 23, 0.35);
+        --shadow-lg: 0 28px 80px rgba(2, 6, 23, 0.65);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        font-family: "IBM Plex Sans", "Noto Sans", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(900px 540px at 85% -15%, rgba(59, 130, 246, 0.12), transparent 60%),
+          radial-gradient(700px 380px at -5% 10%, rgba(14, 165, 233, 0.1), transparent 60%),
+          var(--bg);
+      }
+      [data-theme="dark"] body {
+        background:
+          radial-gradient(1000px 560px at 85% -15%, rgba(56, 189, 248, 0.1), transparent 62%),
+          radial-gradient(760px 420px at -5% 10%, rgba(59, 130, 246, 0.08), transparent 62%),
+          var(--bg);
+      }
+      .glass-header {
+        backdrop-filter: blur(12px);
+        background: color-mix(in oklab, var(--panel) 84%, transparent);
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow-sm);
+      }
+      .action-item {
+        transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+      }
+      .action-item:hover {
+        transform: translateX(4px);
+        background: color-mix(in oklab, var(--accent) 12%, var(--panel-soft));
+        border-color: color-mix(in oklab, var(--accent) 44%, var(--border));
+      }
+      .kv {
+        background: var(--panel-soft);
+        border: 1px solid var(--border);
+        border-radius: 0.875rem;
+        padding: 0.85rem 0.95rem;
+        min-height: 4.6rem;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+      .kv span {
+        display: block;
+        margin-bottom: 0.35rem;
+        font-size: 0.7rem;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+      .kv strong {
+        display: block;
+        font-family: "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+        font-size: 0.84rem;
+        line-height: 1.3;
+        color: var(--text);
+        font-weight: 650;
+        word-break: break-all;
+      }
+      .kv {
+        height: 100%;
+      }
+      .mixed-proxy-block {
+        min-height: 5.6rem;
+        display: flex;
+        align-items: center;
+      }
+      .mixed-proxy-block > div {
+        width: 100%;
+      }
+      .modal {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 50;
+      }
+      .modal.open {
+        display: flex;
+      }
+      .modal-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(2, 6, 23, 0.58);
+        backdrop-filter: blur(6px);
+      }
+      .modal-card {
+        position: relative;
+        z-index: 1;
+        width: min(460px, 92vw);
+        background: color-mix(in oklab, var(--panel) 96%, transparent);
+        border: 1px solid var(--border);
+        border-radius: 1rem;
+        box-shadow: var(--shadow-lg);
+        padding: 1.1rem 1.1rem 1rem;
+        backdrop-filter: blur(14px);
+      }
+      .modal-card.compact {
+        width: min(390px, 92vw);
+      }
+      .field,
+      .auto-field,
+      .toggle {
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+      .field {
+        display: grid;
+        gap: 0.45rem;
+      }
+      .field textarea,
+      .field select,
+      .field input[type="password"],
+      .auto-field input {
+        width: 100%;
+        color: var(--text);
+        border: 1px solid var(--border);
+        background: var(--panel-soft);
+        border-radius: 0.72rem;
+        padding: 0.62rem 0.72rem;
+        line-height: 1.55;
+        outline: none;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+      }
+      .field textarea:focus,
+      .field select:focus,
+      .field input[type="password"]:focus,
+      .auto-field input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--ring);
+      }
+      .field textarea {
+        min-height: 136px;
+        resize: vertical;
+      }
+      .toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+      }
+      .toggle input {
+        display: none;
+      }
+      .toggle .slider {
+        width: 2.25rem;
+        height: 1.25rem;
+        border-radius: 999px;
+        background: var(--panel-soft);
+        border: 1px solid var(--border);
+        position: relative;
+        transition: all 0.2s ease;
+      }
+      .toggle .slider::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 0.8rem;
+        height: 0.8rem;
+        border-radius: 50%;
+        background: var(--muted);
+        transition: all 0.2s ease;
+      }
+      .toggle input:checked + .slider {
+        border-color: color-mix(in oklab, var(--accent) 65%, var(--border));
+        background: color-mix(in oklab, var(--accent) 18%, var(--panel-soft));
+      }
+      .toggle input:checked + .slider::after {
+        transform: translateX(0.95rem);
+        background: var(--accent);
+      }
+      .help {
+        color: var(--muted);
+        font-size: 0.74rem;
+      }
+      .error {
+        color: #ef4444;
+        font-size: 0.78rem;
+      }
+      .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.6rem;
+        margin-top: 0.95rem;
+      }
+      .latency-card {
+        border: 1px solid var(--border);
+        background: var(--panel-soft);
+        border-radius: 0.9rem;
+        padding: 0.85rem 0.9rem;
+      }
+      .latency-badge {
+        width: 1.5rem;
+        height: 1.5rem;
+        border-radius: 0.45rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: #fff;
+      }
+      .latency-logo {
+        width: 1.5rem;
+        height: 1.5rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .latency-logo svg {
+        width: 1.35rem;
+        height: 1.35rem;
+        display: block;
+      }
+      .latency-refresh {
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        width: 2rem;
+        height: 2rem;
+        border-radius: 0.65rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      .latency-refresh:disabled {
+        opacity: 0.65;
+        cursor: not-allowed;
+      }
+      .usage-track {
+        width: 100%;
+        height: 0.6rem;
+        border-radius: 999px;
+        background: color-mix(in oklab, var(--panel-soft) 85%, var(--border));
+        overflow: hidden;
+        border: 1px solid var(--border);
+      }
+      .usage-fill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #22c55e 0%, #16a34a 100%);
+        transition: width 0.35s ease;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <script src="./vendor/react.production.min.js"></script>
+    <script src="./vendor/react-dom.production.min.js"></script>
+    <script src="./vendor/htm.umd.js"></script>
+    <script>
+
+      const html = htm.bind(React.createElement);
+      const IconBase = ({ className = 'h-4 w-4', children }) => html`
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className=${className}
+          aria-hidden="true"
+        >
+          ${children}
+        </svg>
+      `;
+      const LayoutDashboard = ({ className }) => html`
+        <${IconBase} className=${className}>
+          <rect x="3" y="3" width="7" height="7" />
+          <rect x="14" y="3" width="7" height="7" />
+          <rect x="14" y="14" width="7" height="7" />
+          <rect x="3" y="14" width="7" height="7" />
+        </${IconBase}>
+      `;
+      const Activity = ({ className }) => html`
+        <${IconBase} className=${className}>
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+        </${IconBase}>
+      `;
+      const Globe = ({ className }) => html`
+        <${IconBase} className=${className}>
+          <circle cx="12" cy="12" r="10" />
+          <path d="M2 12h20" />
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+        </${IconBase}>
+      `;
+      const ChevronRight = ({ className }) => html`
+        <${IconBase} className=${className}>
+          <polyline points="9 18 15 12 9 6" />
+        </${IconBase}>
+      `;
+      const MoonStar = ({ className }) => html`
+        <${IconBase} className=${className}>
+          <path d="M12 3a6 6 0 1 0 9 9 8 8 0 1 1-9-9z" />
+          <path d="M19 3v4" />
+          <path d="M17 5h4" />
+        </${IconBase}>
+      `;
+      const Settings2 = ({ className }) => html`
+        <${IconBase} className=${className}>
+          <path d="M20 7h-9" />
+          <path d="M14 17H5" />
+          <circle cx="17" cy="7" r="3" />
+          <circle cx="8" cy="17" r="3" />
+        </${IconBase}>
+      `;
+      const InfoCircle = ({ className }) => html`
+        <${IconBase} className=${className}>
+          <circle cx="12" cy="12" r="9" />
+          <line x1="12" y1="10.5" x2="12" y2="16" />
+          <line x1="12" y1="7.5" x2="12.01" y2="7.5" />
+        </${IconBase}>
+      `;
+      const GithubMark = ({ className = 'h-3.5 w-3.5' }) => html`
+        <svg viewBox="0 0 24 24" className=${className} aria-hidden="true">
+          <circle cx="12" cy="12" r="10" fill="currentColor"></circle>
+          <path fill="#fff" d="M12 6.7c-3 0-5.5 2.4-5.5 5.5 0 2.4 1.5 4.4 3.6 5.1.3.1.4-.1.4-.3v-1.2c-1.5.3-1.8-.6-1.8-.6-.2-.6-.6-.8-.6-.8-.5-.3 0-.3 0-.3.6 0 .9.6.9.6.5.9 1.3.7 1.6.5.1-.4.2-.7.4-.9-1.2-.1-2.5-.6-2.5-2.9 0-.6.2-1.1.6-1.5-.1-.2-.3-.7.1-1.5 0 0 .5-.2 1.6.6.5-.1 1-.2 1.5-.2s1 .1 1.5.2c1.1-.8 1.6-.6 1.6-.6.3.8.1 1.3.1 1.5.4.4.6.9.6 1.5 0 2.2-1.3 2.7-2.5 2.9.2.2.4.6.4 1.1V17c0 .2.1.4.4.3 2.1-.7 3.6-2.7 3.6-5.1 0-3-2.4-5.5-5.5-5.5z"></path>
+        </svg>
+      `;
+      const Server = ({ className }) => html`
+        <${IconBase} className=${className}>
+          <rect x="2.5" y="3.5" width="19" height="7" rx="2" />
+          <rect x="2.5" y="13.5" width="19" height="7" rx="2" />
+          <line x1="7" y1="7" x2="7.01" y2="7" />
+          <line x1="7" y1="17" x2="7.01" y2="17" />
+          <line x1="11" y1="7" x2="17.5" y2="7" />
+          <line x1="11" y1="17" x2="17.5" y2="17" />
+        </${IconBase}>
+      `;
+      const RefreshCw = ({ className }) => html`
+        <${IconBase} className=${className}>
+          <path d="M21 2v6h-6" />
+          <path d="M3 12a9 9 0 0 1 15-6l3 2" />
+          <path d="M3 22v-6h6" />
+          <path d="M21 12a9 9 0 0 1-15 6l-3-2" />
+        </${IconBase}>
+      `;
+
+      function App() {
+        const actionLinks = [
+          {
+            id: 'link-metacubexd',
+            title: 'Metacubexd',
+            tag: '/ui/metacubexd',
+            Icon: LayoutDashboard
+          },
+          {
+            id: 'link-yacd',
+            title: 'Yacd',
+            tag: '/ui/yacd',
+            Icon: Activity
+          },
+          {
+            id: 'link-zashboard',
+            title: 'Zashboard',
+            tag: '/ui/zashboard',
+            Icon: Globe
+          }
+        ];
+
+        return html`
+          <main className="mx-auto max-w-7xl px-5 pb-14 pt-8 sm:px-8 sm:pt-10 lg:px-12">
+            <header className="glass-header sticky top-4 z-20 rounded-2xl border px-4 py-4 shadow-sm sm:px-6"
+              style=${{ borderColor: 'var(--border)' }}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h1 className="text-[1.45rem] font-semibold tracking-tight sm:text-[1.65rem]">Clash Portal</h1>
+                  <p className="mt-1 text-sm" style=${{ color: 'var(--muted)' }}>配置展示与面板入口</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <div className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs"
+                    style=${{ borderColor: 'var(--border)', background: 'var(--panel-soft)', color: 'var(--muted)' }}>
+                    <${LayoutDashboard} className="h-3.5 w-3.5" />
+                    <span>快捷端口</span>
+                    <span id="portal-port" className="font-mono font-semibold" style=${{ color: 'var(--text)' }}>9090</span>
+                  </div>
+                  <button id="theme-toggle" type="button"
+                    className="inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition hover:-translate-y-0.5"
+                    style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}>
+                    <${MoonStar} className="h-4 w-4" />
+                    <span id="theme-label">浅色</span>
+                  </button>
+                  <button id="open-subs" type="button"
+                    className="inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition hover:-translate-y-0.5"
+                    style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}>
+                    <${Server} className="h-4 w-4" />
+                    订阅
+                  </button>
+                  <button id="open-settings" type="button"
+                    className="inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition hover:-translate-y-0.5"
+                    style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}>
+                    <${Settings2} className="h-4 w-4" />
+                    设置
+                  </button>
+                  <button id="open-about" type="button"
+                    className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-xl border transition hover:-translate-y-0.5"
+                    style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}
+                    title="关于"
+                    aria-label="关于">
+                    <${InfoCircle} className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            </header>
+
+            <section className="mt-7 grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)]">
+              <article className="panel rounded-2xl p-6 sm:p-7">
+                <div className="space-y-4">
+                  <p className="text-[11px] uppercase tracking-[0.16em]" style=${{ color: 'var(--muted)' }}>当前配置</p>
+                  <div id="info" className="grid auto-rows-fr gap-3 sm:grid-cols-2"></div>
+
+                  <div className="mixed-proxy-block rounded-2xl border-l-4 p-4"
+                    style=${{ borderColor: 'var(--accent)', background: 'color-mix(in oklab, var(--accent) 10%, var(--panel))' }}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.12em]" style=${{ color: 'var(--muted)' }}>混合代理地址 (HTTP)</p>
+                        <p id="mixed-proxy" className="mt-1 font-mono text-sm font-semibold" style=${{ color: 'var(--accent-strong)' }}>
+                          http://127.0.0.1:7893
+                        </p>
+                      </div>
+                      <button id="copy-mixed" type="button"
+                        className="rounded-lg border px-3 py-1.5 text-xs font-medium transition hover:-translate-y-0.5"
+                        style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}>
+                        复制
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+              </article>
+
+              <article className="panel rounded-2xl p-6 sm:p-7">
+                <div>
+                  <p className="mb-3 text-[11px] uppercase tracking-[0.16em]" style=${{ color: 'var(--muted)' }}>面板入口</p>
+                  <div className="space-y-3">
+                    ${actionLinks.map(({ id, title, tag, Icon }) => html`
+                      <a id=${id}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="action-item group flex w-full items-center justify-between rounded-xl border px-3.5 py-3 no-underline transition duration-150"
+                        style=${{ borderColor: 'var(--border)', background: 'var(--panel-soft)', color: 'var(--text)' }}>
+                        <span className="flex min-w-0 items-center gap-2.5">
+                          <${Icon} className="h-4 w-4 shrink-0" style=${{ color: 'var(--accent)' }} />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium">${title}</span>
+                            <span className="block truncate text-xs font-mono" style=${{ color: 'var(--muted)' }}>${tag}</span>
+                          </span>
+                        </span>
+                        <span className="flex items-center gap-1 text-xs" style=${{ color: 'var(--muted)' }}>
+                          进入
+                          <${ChevronRight} className="h-4 w-4 transition-transform duration-150 group-hover:translate-x-1" />
+                        </span>
+                      </a>
+                    `)}
+                  </div>
+                </div>
+                <div className="mt-4 rounded-xl border p-4" style=${{ borderColor: 'var(--border)', background: 'var(--panel-soft)' }}>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] uppercase tracking-[0.12em]" style=${{ color: 'var(--muted)' }}>剩余流量</p>
+                    <strong id="sub-usage-percent" className="text-sm font-semibold" style=${{ color: 'var(--text)' }}>--%</strong>
+                  </div>
+                  <div className="usage-track mt-2">
+                    <div id="sub-usage-fill" className="usage-fill"></div>
+                  </div>
+                  <div className="mt-2 flex items-start justify-between gap-3">
+                    <p id="sub-usage-numbers" className="min-w-0 text-xs" style=${{ color: 'var(--muted)' }}>--</p>
+                    <p id="sub-expire" className="shrink-0 text-xs" style=${{ color: 'var(--muted)' }}>到期 --</p>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <p className="text-xs" style=${{ color: 'var(--muted)' }}>上次更新：<span id="last-update">-</span></p>
+                    <button id="update-sub" type="button"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition hover:-translate-y-0.5"
+                      style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}
+                      title="更新订阅"
+                      aria-label="更新订阅">
+                      <span id="update-sub-icon" className="inline-flex items-center justify-center">
+                        <${RefreshCw} className="h-3.5 w-3.5" />
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </article>
+            </section>
+
+            <section className="mt-6">
+              <article className="panel rounded-2xl p-6 sm:p-7">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em]" style=${{ color: 'var(--muted)' }}>连接延时检测</p>
+                  <div className="inline-flex items-center gap-2">
+                    <button id="toggle-latency-mode" className="latency-refresh" type="button" title="切换检测模式">
+                      <span id="latency-mode-icon"></span>
+                    </button>
+                    <button id="refresh-latency" className="latency-refresh" type="button" title="刷新延时">
+                      <${RefreshCw} className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+                <div id="latency-grid" className="mt-3 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4"></div>
+              </article>
+            </section>
+          </main>
+
+          <div className="modal" id="settings-modal" aria-hidden="true">
+            <div className="modal-backdrop" id="settings-backdrop"></div>
+            <div className="modal-card">
+              <h2 className="mb-3 text-base font-semibold">设置</h2>
+              <div className="grid gap-3">
+                <label className="toggle">
+                  <input type="checkbox" id="auto-enabled" />
+                  <span className="slider"></span>
+                  <span>自动更新</span>
+                </label>
+                <label className="toggle">
+                  <input type="checkbox" id="builtin-enabled" />
+                  <span className="slider"></span>
+                  <span>使用内置规则</span>
+                </label>
+                <label className="auto-field inline-flex items-center gap-2">
+                  自动更新间隔
+                  <input id="auto-minutes" type="number" min="0" step="0.5" className="w-24 text-center" />
+                  分钟
+                </label>
+              </div>
+              <div className="modal-actions">
+                <button className="rounded-lg border px-3 py-1.5 text-xs" style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }} id="close-settings">取消</button>
+                <button className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-white" style=${{ borderColor: 'var(--accent-strong)', background: 'var(--accent-strong)' }} id="save-settings">保存</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="modal" id="subs-modal" aria-hidden="true">
+            <div className="modal-backdrop" id="subs-backdrop"></div>
+            <div className="modal-card">
+              <h2 className="mb-3 text-base font-semibold">订阅管理</h2>
+              <div className="grid gap-3">
+                <label className="field">
+                  订阅链接（每行一个）
+                  <textarea id="subs-text" placeholder="https://example.com/sub1&#10;https://example.com/sub2"></textarea>
+                </label>
+                <label className="field">
+                  当前使用的订阅
+                  <select id="subs-active"></select>
+                </label>
+                <div className="help" id="subs-help">保存后会自动更新并应用当前订阅。</div>
+                <div className="error" id="subs-error" style=${{ display: 'none' }}></div>
+              </div>
+              <div className="modal-actions">
+                <button className="rounded-lg border px-3 py-1.5 text-xs" style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }} id="close-subs">取消</button>
+                <button className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-white" style=${{ borderColor: 'var(--accent-strong)', background: 'var(--accent-strong)' }} id="save-subs">保存</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="modal" id="about-modal" aria-hidden="true">
+            <div className="modal-backdrop" id="about-backdrop"></div>
+            <div className="modal-card compact">
+              <h2 className="mb-3 text-base font-semibold">关于</h2>
+              <div className="grid gap-2.5 text-sm">
+                <p style=${{ color: 'var(--muted)' }}>
+                  Mihomo内核版本：<span id="about-core-version" className="font-mono" style=${{ color: 'var(--text)' }}>--</span>
+                </p>
+                <a href="https://github.com/MetaCubeX/mihomo" target="_blank" rel="noreferrer"
+                  className="inline-flex items-center gap-2 no-underline"
+                  style=${{ color: 'var(--text)' }}>
+                  <${GithubMark} className="h-5 w-5 shrink-0" />
+                  <span style=${{ color: 'var(--accent)' }}>Mihomo内核仓库</span>
+                </a>
+                <a href="https://github.com/bctjo/docker-clash" target="_blank" rel="noreferrer"
+                  className="inline-flex items-center gap-2 no-underline"
+                  style=${{ color: 'var(--text)' }}>
+                  <${GithubMark} className="h-5 w-5 shrink-0" />
+                  <span style=${{ color: 'var(--accent)' }}>本项目仓库</span>
+                </a>
+              </div>
+              <div className="modal-actions">
+                <button className="rounded-lg border px-3 py-1.5 text-xs" style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }} id="close-about">关闭</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="modal" id="admin-modal" aria-hidden="true">
+            <div className="modal-backdrop" id="admin-backdrop"></div>
+            <div className="modal-card compact">
+              <h2 className="mb-3 text-base font-semibold">管理密钥</h2>
+              <div className="grid gap-3">
+                <label className="field">
+                  请输入管理密钥
+                  <input id="admin-key" type="password" placeholder="管理密钥" autocomplete="current-password" />
+                </label>
+                <div className="error" id="admin-error" style=${{ display: 'none' }}></div>
+              </div>
+              <div className="modal-actions">
+                <button className="rounded-lg border px-3 py-1.5 text-xs" style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }} id="admin-cancel">取消</button>
+                <button className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-white" style=${{ borderColor: 'var(--accent-strong)', background: 'var(--accent-strong)' }} id="admin-confirm">确认</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('app'));
+      ReactDOM.flushSync(() => {
+        root.render(html`<${App} />`);
+      });
+      window.__PORTAL_READY__ = Promise.resolve();
+    </script>
+
+    <script type="module">
+      await window.__PORTAL_READY__;
+      const config = window.__PORTAL_CONFIG__ || {};
+      const host = window.location.hostname || '127.0.0.1';
+      const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
+      const themeStorageKey = 'portalTheme';
+      const themeToggle = document.getElementById('theme-toggle');
+      const themeLabel = document.getElementById('theme-label');
+      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      let activeTheme = localStorage.getItem(themeStorageKey) || (prefersDark ? 'dark' : 'light');
+
+      const applyTheme = (theme) => {
+        activeTheme = theme;
+        document.documentElement.setAttribute('data-theme', theme);
+        if (themeLabel) themeLabel.textContent = theme === 'dark' ? '深色' : '浅色';
+      };
+
+      applyTheme(activeTheme);
+      if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+          const nextTheme = activeTheme === 'dark' ? 'light' : 'dark';
+          localStorage.setItem(themeStorageKey, nextTheme);
+          applyTheme(nextTheme);
+        });
+      }
+
+      const dashPort = config.dashPort || '9097';
+      const portalPort = config.portalPort || window.location.port || '9090';
+      const httpPort = config.httpPort || '7890';
+      const socksPort = config.socksPort || '7891';
+      const tproxyPort = config.tproxyPort || '7892';
+      const mixedPort = config.mixedPort || '7893';
+      const secret = config.secret || '';
+      const updateIntervalSec = Number(config.updateIntervalSec || '0');
+      const adminAuthEnabled = config.adminAuthEnabled === true;
+      const adminStorageKey = 'portalAdminKey';
+
+      const portalPortEl = document.getElementById('portal-port');
+      if (portalPortEl) portalPortEl.textContent = portalPort;
+
+      const info = document.getElementById('info');
+      const hostPort = `${host}:${dashPort}`;
+
+      const rows = [
+        { label: '控制地址', value: `${protocol}://${hostPort}` },
+        { label: 'HTTP', value: httpPort },
+        { label: 'SOCKS', value: socksPort },
+        { label: 'TPROXY', value: tproxyPort },
+        { label: 'Mixed', value: mixedPort },
+        { label: 'Secret', value: secret || '未设置' }
+      ];
+
+      info.innerHTML = rows
+        .map((item) => `<div class="kv"><span>${item.label}</span><strong>${item.value}</strong></div>`)
+        .join('');
+
+      const baseQuery = new URLSearchParams({
+        http: 'true',
+        hostname: host,
+        port: dashPort,
+        secret: secret
+      });
+
+      const yacdQuery = new URLSearchParams({
+        hostname: host,
+        port: dashPort,
+        secret: secret
+      });
+
+      document.getElementById('link-metacubexd').href = `${protocol}://${hostPort}/ui/metacubexd/#/setup?${baseQuery.toString()}`;
+      document.getElementById('link-zashboard').href = `${protocol}://${hostPort}/ui/zashboard/#/setup?${baseQuery.toString()}`;
+      document.getElementById('link-yacd').href = `${protocol}://${hostPort}/ui/yacd/?${yacdQuery.toString()}`;
+
+      const mixedProxyEl = document.getElementById('mixed-proxy');
+      const mixedProxyUrl = `http://${host}:${mixedPort}`;
+      mixedProxyEl.textContent = mixedProxyUrl;
+
+      const copyBtn = document.getElementById('copy-mixed');
+      const fallbackCopy = (text) => {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.top = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        return ok;
+      };
+
+      copyBtn.addEventListener('click', async () => {
+        let ok = false;
+        if (navigator.clipboard && window.isSecureContext) {
+          try {
+            await navigator.clipboard.writeText(mixedProxyUrl);
+            ok = true;
+          } catch (err) {
+            ok = false;
+          }
+        }
+        if (!ok) {
+          ok = fallbackCopy(mixedProxyUrl);
+        }
+        copyBtn.textContent = ok ? '已复制' : '复制失败';
+        setTimeout(() => { copyBtn.textContent = '复制'; }, 1200);
+      });
+
+      const lastUpdateEl = document.getElementById('last-update');
+      const updateBtn = document.getElementById('update-sub');
+      const updateBtnIcon = document.getElementById('update-sub-icon');
+      const subUsageFillEl = document.getElementById('sub-usage-fill');
+      const subUsagePercentEl = document.getElementById('sub-usage-percent');
+      const subUsageNumbersEl = document.getElementById('sub-usage-numbers');
+      const subExpireEl = document.getElementById('sub-expire');
+      const aboutCoreVersionEl = document.getElementById('about-core-version');
+      const latencyModeBtn = document.getElementById('toggle-latency-mode');
+      const latencyModeIcon = document.getElementById('latency-mode-icon');
+      const refreshLatencyBtn = document.getElementById('refresh-latency');
+      const latencyGrid = document.getElementById('latency-grid');
+      const latencyModeStorageKey = 'latencyMode';
+      let latencyRefreshing = false;
+      let latencyMode = localStorage.getItem(latencyModeStorageKey);
+      if (latencyMode !== 'router' && latencyMode !== 'browser') {
+        latencyMode = 'browser';
+      }
+
+      const browserModeSvg = '<svg viewBox="0 0 24 24" aria-hidden="true" style="width:1rem;height:1rem;display:block;"><rect x="3" y="4" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"></rect><path d="M8 20h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg>';
+      const routerModeSvg = '<svg viewBox="0 0 24 24" aria-hidden="true" style="width:1rem;height:1rem;display:block;"><rect x="3" y="11" width="18" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="2"></rect><path d="M12 6v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path><circle cx="8" cy="14.5" r="1" fill="currentColor"></circle><circle cx="12" cy="14.5" r="1" fill="currentColor"></circle><circle cx="16" cy="14.5" r="1" fill="currentColor"></circle></svg>';
+
+      const applyLatencyModeUI = () => {
+        latencyModeIcon.innerHTML = latencyMode === 'router' ? routerModeSvg : browserModeSvg;
+        latencyModeBtn.title = latencyMode === 'router' ? '当前：路由器检测（节点）' : '当前：浏览器检测（本地）';
+      };
+
+      const latencyLogoSvg = (key) => {
+        if (key === 'youtube') {
+          return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="4" fill="#ef4444"></rect><polygon points="10,9 16,12 10,15" fill="#fff"></polygon></svg>';
+        }
+        if (key === 'github') {
+          return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#111827"></circle><path fill="#fff" d="M12 6.7c-3 0-5.5 2.4-5.5 5.5 0 2.4 1.5 4.4 3.6 5.1.3.1.4-.1.4-.3v-1.2c-1.5.3-1.8-.6-1.8-.6-.2-.6-.6-.8-.6-.8-.5-.3 0-.3 0-.3.6 0 .9.6.9.6.5.9 1.3.7 1.6.5.1-.4.2-.7.4-.9-1.2-.1-2.5-.6-2.5-2.9 0-.6.2-1.1.6-1.5-.1-.2-.3-.7.1-1.5 0 0 .5-.2 1.6.6.5-.1 1-.2 1.5-.2s1 .1 1.5.2c1.1-.8 1.6-.6 1.6-.6.3.8.1 1.3.1 1.5.4.4.6.9.6 1.5 0 2.2-1.3 2.7-2.5 2.9.2.2.4.6.4 1.1V17c0 .2.1.4.4.3 2.1-.7 3.6-2.7 3.6-5.1 0-3-2.4-5.5-5.5-5.5z"></path></svg>';
+        }
+        if (key === 'tmdb') {
+          return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="4" fill="#0ea5e9"></rect><text x="12" y="15.2" text-anchor="middle" font-size="7.2" font-family="Arial, sans-serif" font-weight="700" fill="#fff">TMDB</text></svg>';
+        }
+        return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5.2" r="2.3" fill="#2563eb"></circle><circle cx="6.8" cy="8.8" r="2.1" fill="#2563eb"></circle><circle cx="17.2" cy="8.8" r="2.1" fill="#2563eb"></circle><ellipse cx="12" cy="15.4" rx="5.1" ry="4.2" fill="#2563eb"></ellipse></svg>';
+      };
+
+      const renderLatencyItems = (sites = [], pending = false) => {
+        if (!sites.length && !pending) {
+          latencyGrid.innerHTML = '';
+          return;
+        }
+        if (!sites.length) {
+          sites = [
+            { key: 'youtube', name: 'YouTube' },
+            { key: 'github', name: 'GitHub' },
+            { key: 'tmdb', name: 'TMDB' },
+            { key: 'baidu', name: '百度' }
+          ];
+          pending = true;
+        }
+        latencyGrid.innerHTML = sites.map((site) => {
+          const latency = Number(site.latencyMs);
+          const latencyText = pending ? '检测中' : (latency >= 0 ? `${latency} ms` : '超时');
+          const statusColor = pending ? '#94a3b8' : (site.reachable ? '#16a34a' : '#ef4444');
+          const logo = latencyLogoSvg(site.key);
+          return `
+            <div class="latency-card">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                <span style="display:flex;align-items:center;gap:8px;min-width:0;">
+                  <span class="latency-logo">${logo}</span>
+                  <span style="font-size:0.9rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${site.name || '-'}</span>
+                </span>
+                <span style="font-family:'JetBrains Mono','SFMono-Regular',Menlo,monospace;font-size:0.85rem;font-weight:650;color:${statusColor};">${latencyText}</span>
+              </div>
+            </div>`;
+        }).join('');
+      };
+
+      const getAdminHeader = () => {
+        if (!adminAuthEnabled) return {};
+        const key = sessionStorage.getItem(adminStorageKey);
+        if (!key) return {};
+        const token = btoa(`admin:${key}`);
+        return { Authorization: `Basic ${token}` };
+      };
+
+      const adminModal = document.getElementById('admin-modal');
+      const adminBackdrop = document.getElementById('admin-backdrop');
+      const adminKeyInput = document.getElementById('admin-key');
+      const adminConfirm = document.getElementById('admin-confirm');
+      const adminCancel = document.getElementById('admin-cancel');
+      const adminError = document.getElementById('admin-error');
+      let adminResolve = null;
+      let adminPromptPromise = null;
+
+      const openAdminModal = () => {
+        adminModal.classList.add('open');
+        adminModal.setAttribute('aria-hidden', 'false');
+        adminError.style.display = 'none';
+        adminKeyInput.value = '';
+        setTimeout(() => adminKeyInput.focus(), 0);
+      };
+      const closeAdminModal = () => {
+        adminModal.classList.remove('open');
+        adminModal.setAttribute('aria-hidden', 'true');
+      };
+
+      const requestAdminKey = (errorText = '') => {
+        if (!adminAuthEnabled) return Promise.resolve(false);
+        if (adminPromptPromise) {
+          if (errorText) {
+            adminError.textContent = errorText;
+            adminError.style.display = 'block';
+          }
+          return adminPromptPromise;
+        }
+        openAdminModal();
+        if (errorText) {
+          adminError.textContent = errorText;
+          adminError.style.display = 'block';
+        }
+        adminPromptPromise = new Promise((resolve) => {
+          adminResolve = resolve;
+        });
+        return adminPromptPromise;
+      };
+
+      const submitAdminKey = () => {
+        const key = adminKeyInput.value.trim();
+        if (!key) {
+          adminError.textContent = '请输入管理密钥。';
+          adminError.style.display = 'block';
+          return;
+        }
+        sessionStorage.setItem(adminStorageKey, key);
+        closeAdminModal();
+        if (adminResolve) {
+          adminResolve(true);
+          adminResolve = null;
+        }
+        adminPromptPromise = null;
+      };
+      const cancelAdminKey = () => {
+        closeAdminModal();
+        if (adminResolve) {
+          adminResolve(false);
+          adminResolve = null;
+        }
+        adminPromptPromise = null;
+      };
+
+      adminConfirm.addEventListener('click', submitAdminKey);
+      adminCancel.addEventListener('click', cancelAdminKey);
+      adminBackdrop.addEventListener('click', cancelAdminKey);
+      adminKeyInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          submitAdminKey();
+        }
+      });
+
+      const fetchWithAuth = async (url, options = {}, allowPrompt = true) => {
+        const isAuthFailed = (status) => status === 401 || status === 403;
+        const maxAttempts = adminAuthEnabled && allowPrompt ? 3 : 1;
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+          if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey) && allowPrompt) {
+            const promptText = attempt > 0 ? '管理密钥错误，请重试。' : '';
+            const ok = await requestAdminKey(promptText);
+            if (!ok) {
+              return new Response(null, { status: 403 });
+            }
+          }
+          const headers = { ...(options.headers || {}), ...getAdminHeader() };
+          const res = await fetch(url, { ...options, headers });
+          if (!isAuthFailed(res.status) || !adminAuthEnabled || !allowPrompt) {
+            return res;
+          }
+          sessionStorage.removeItem(adminStorageKey);
+        }
+        return new Response(null, { status: 403 });
+      };
+
+      let lastUpdateAtMs = null;
+      let lastUpdateFallback = '-';
+
+      const parseDateTime = (value) => {
+        if (!value) return null;
+        const raw = String(value).trim();
+        const parsed = new Date(raw.replace(' ', 'T'));
+        if (!Number.isNaN(parsed.getTime())) {
+          return parsed.getTime();
+        }
+        const dateOnlyMatch = raw.match(/\d{4}-\d{2}-\d{2}/);
+        if (dateOnlyMatch) {
+          const dateOnly = new Date(`${dateOnlyMatch[0]}T00:00:00`);
+          if (!Number.isNaN(dateOnly.getTime())) {
+            return dateOnly.getTime();
+          }
+        }
+        return null;
+      };
+
+      const formatRelativeTime = (timeMs) => {
+        const diffMs = Date.now() - timeMs;
+        if (diffMs < 60 * 1000) return '刚刚';
+        if (diffMs < 60 * 60 * 1000) return `${Math.floor(diffMs / (60 * 1000))} 分钟前`;
+        if (diffMs < 24 * 60 * 60 * 1000) return `${Math.floor(diffMs / (60 * 60 * 1000))} 小时前`;
+        return `${Math.floor(diffMs / (24 * 60 * 60 * 1000))} 天前`;
+      };
+
+      const renderLastUpdate = () => {
+        if (lastUpdateAtMs) {
+          lastUpdateEl.textContent = formatRelativeTime(lastUpdateAtMs);
+          return;
+        }
+        lastUpdateEl.textContent = lastUpdateFallback;
+      };
+
+      const fetchStatus = async () => {
+        try {
+          const res = await fetch(`/status.json?t=${Date.now()}`, { cache: 'no-store' });
+          if (!res.ok) throw new Error('status');
+          const data = await res.json();
+          if (data.lastUpdateShanghai) {
+            const parsedTime = parseDateTime(data.lastUpdateShanghai);
+            if (parsedTime) {
+              lastUpdateAtMs = parsedTime;
+              lastUpdateFallback = '-';
+            } else {
+              lastUpdateAtMs = null;
+              lastUpdateFallback = String(data.lastUpdateShanghai);
+            }
+          } else {
+            lastUpdateAtMs = null;
+            lastUpdateFallback = '-';
+          }
+          renderLastUpdate();
+        } catch (err) {
+          lastUpdateAtMs = null;
+          lastUpdateFallback = '-';
+          renderLastUpdate();
+        }
+      };
+
+      const formatBytes = (bytes) => {
+        const n = Number(bytes);
+        if (!Number.isFinite(n) || n < 0) return '--';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let val = n;
+        let idx = 0;
+        while (val >= 1024 && idx < units.length - 1) {
+          val /= 1024;
+          idx += 1;
+        }
+        return `${val.toFixed(val >= 100 || idx === 0 ? 0 : 2)} ${units[idx]}`;
+      };
+
+      const renderSubscriptionInfoUnknown = (note = '暂无订阅流量信息') => {
+        subUsageFillEl.style.width = '0%';
+        subUsageFillEl.style.background = 'linear-gradient(90deg, #94a3b8 0%, #64748b 100%)';
+        subUsagePercentEl.textContent = '--%';
+        subUsageNumbersEl.textContent = note;
+        subExpireEl.textContent = '到期 --';
+      };
+
+      const formatExpireDate = (value) => {
+        if (!value) return '--';
+        const raw = String(value).trim();
+        const dateMatch = raw.match(/\d{4}-\d{2}-\d{2}/);
+        if (dateMatch) return dateMatch[0];
+        const parsed = new Date(raw);
+        if (!Number.isNaN(parsed.getTime())) {
+          return parsed.toISOString().slice(0, 10);
+        }
+        return raw;
+      };
+
+      const fetchSubscriptionInfo = async () => {
+        try {
+          const res = await fetch(`/subscription-info.json?t=${Date.now()}`, { cache: 'no-store' });
+          if (!res.ok) throw new Error('subscription-info');
+          const data = await res.json();
+          if (!data.hasInfo) {
+            renderSubscriptionInfoUnknown(data.message || '订阅未返回流量信息');
+            return;
+          }
+          const remaining = Number(data.remainingBytes || 0);
+          const total = Number(data.totalBytes || 0);
+          const remainingPercent = total > 0 ? Math.max(0, Math.min(100, Math.round((remaining * 100) / total))) : 0;
+          subUsageFillEl.style.width = `${remainingPercent}%`;
+          subUsageFillEl.style.background = remainingPercent <= 10
+            ? 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)'
+            : 'linear-gradient(90deg, #22c55e 0%, #16a34a 100%)';
+          subUsagePercentEl.textContent = `${remainingPercent}%`;
+          subUsageNumbersEl.textContent = `剩余 ${formatBytes(remaining)} / 总量 ${formatBytes(total)}`;
+          subExpireEl.textContent = `到期 ${formatExpireDate(data.expireAtShanghai)}`;
+        } catch (err) {
+          renderSubscriptionInfoUnknown('读取订阅流量信息失败');
+        }
+      };
+
+      const fetchCoreVersion = async () => {
+        if (!aboutCoreVersionEl) return;
+        try {
+          const headers = {};
+          if (secret) {
+            headers.Authorization = `Bearer ${secret}`;
+          }
+          const res = await fetch(`${protocol}://${hostPort}/version`, { headers, cache: 'no-store' });
+          if (!res.ok) throw new Error('version');
+          const data = await res.json();
+          const version = data.version || data.mihomo || '--';
+          aboutCoreVersionEl.textContent = version;
+        } catch (err) {
+          aboutCoreVersionEl.textContent = '--';
+        }
+      };
+
+      const fetchLatency = async () => {
+        const jsonPath = latencyMode === 'router' ? '/latency-router.json' : '/latency-browser.json';
+        try {
+          const res = await fetch(`${jsonPath}?t=${Date.now()}`, { cache: 'no-store' });
+          if (!res.ok) throw new Error('latency');
+          const data = await res.json();
+          renderLatencyItems(Array.isArray(data.sites) ? data.sites : [], false);
+          return data;
+        } catch (err) {
+          renderLatencyItems([], false);
+          return null;
+        }
+      };
+
+      const triggerUpdate = async () => {
+        if (updateBtn.disabled) return;
+        if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey)) {
+          const ok = await requestAdminKey();
+          if (!ok) {
+            return;
+          }
+        }
+        updateBtn.disabled = true;
+        updateBtn.style.opacity = '0.55';
+        updateBtn.title = '更新中...';
+        if (updateBtnIcon) updateBtnIcon.classList.add('animate-spin');
+        try {
+          const res = await fetchWithAuth('/update', { method: 'PUT', body: '1' });
+          if (!res.ok) throw new Error('update');
+        } catch (err) {
+          updateBtn.disabled = false;
+          updateBtn.style.opacity = '1';
+          updateBtn.title = '更新失败';
+          if (updateBtnIcon) updateBtnIcon.classList.remove('animate-spin');
+          setTimeout(() => { updateBtn.title = '更新订阅'; }, 1200);
+          return;
+        }
+        setTimeout(async () => {
+          await fetchStatus();
+          await fetchSubscriptionInfo();
+          updateBtn.disabled = false;
+          updateBtn.style.opacity = '1';
+          updateBtn.title = '更新订阅';
+          if (updateBtnIcon) updateBtnIcon.classList.remove('animate-spin');
+        }, 2500);
+      };
+
+      updateBtn.addEventListener('click', triggerUpdate);
+
+      const toggleLatencyMode = async () => {
+        latencyMode = latencyMode === 'router' ? 'browser' : 'router';
+        localStorage.setItem(latencyModeStorageKey, latencyMode);
+        applyLatencyModeUI();
+        await triggerLatencyRefresh();
+      };
+
+      latencyModeBtn.addEventListener('click', toggleLatencyMode);
+
+      const triggerLatencyRefresh = async () => {
+        if (latencyRefreshing || refreshLatencyBtn.disabled) return;
+        if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey)) {
+          const ok = await requestAdminKey();
+          if (!ok) {
+            return;
+          }
+        }
+        latencyRefreshing = true;
+        refreshLatencyBtn.disabled = true;
+        try {
+          const refreshPath = latencyMode === 'router' ? '/latency-router-refresh' : '/latency-browser-refresh';
+          const res = await fetchWithAuth(refreshPath, { method: 'PUT', body: '1' });
+          if (!res.ok) throw new Error('latency-refresh');
+          renderLatencyItems([], true);
+        } catch (err) {
+          latencyRefreshing = false;
+          refreshLatencyBtn.disabled = false;
+          await fetchLatency();
+          return;
+        }
+        let hasData = false;
+        for (let i = 0; i < 12; i += 1) {
+          await sleep(1000);
+          const data = await fetchLatency();
+          if (data && Array.isArray(data.sites) && data.sites.length > 0) {
+            hasData = true;
+            break;
+          }
+        }
+        if (!hasData) {
+          renderLatencyItems([], false);
+        }
+        latencyRefreshing = false;
+        refreshLatencyBtn.disabled = false;
+      };
+
+      refreshLatencyBtn.addEventListener('click', triggerLatencyRefresh);
+
+      const subsModal = document.getElementById('subs-modal');
+      const openSubs = document.getElementById('open-subs');
+      const closeSubs = document.getElementById('close-subs');
+      const saveSubs = document.getElementById('save-subs');
+      const subsBackdrop = document.getElementById('subs-backdrop');
+      const subsText = document.getElementById('subs-text');
+      const subsActive = document.getElementById('subs-active');
+      const subsError = document.getElementById('subs-error');
+      let subsRequired = false;
+
+      const openSubsModal = (required = false) => {
+        subsRequired = required;
+        subsModal.classList.add('open');
+        subsModal.setAttribute('aria-hidden', 'false');
+        closeSubs.style.display = subsRequired ? 'none' : '';
+      };
+      const closeSubsModal = () => {
+        if (subsRequired) return;
+        subsModal.classList.remove('open');
+        subsModal.setAttribute('aria-hidden', 'true');
+      };
+
+      const normalizeUrls = (text) => text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+      const setActiveOptions = (urls, activeIndex) => {
+        subsActive.innerHTML = '';
+        urls.forEach((url, idx) => {
+          const opt = document.createElement('option');
+          opt.value = String(idx);
+          opt.textContent = `${idx + 1}. ${url}`;
+          subsActive.appendChild(opt);
+        });
+        if (urls.length === 0) {
+          const opt = document.createElement('option');
+          opt.value = '0';
+          opt.textContent = '暂无订阅';
+          subsActive.appendChild(opt);
+        }
+        subsActive.value = urls.length ? String(Math.min(activeIndex, urls.length - 1)) : '0';
+      };
+
+      const loadSubscriptions = async () => {
+        const requestUrls = [
+          `/subscriptions.json?t=${Date.now()}`,
+          '/subscriptions.json'
+        ];
+        let lastError = '';
+        try {
+          for (const requestUrl of requestUrls) {
+            const res = await fetchWithAuth(requestUrl, { cache: 'no-store' });
+            if (res.status === 401 || res.status === 403) throw new Error('auth');
+            if (!res.ok) {
+              lastError = `HTTP ${res.status}`;
+              continue;
+            }
+            const data = await res.json();
+            const urls = Array.isArray(data.urls) ? data.urls.filter(Boolean) : [];
+            const active = Number.isFinite(data.active) ? data.active : 0;
+            return { urls, active, authRequired: false, loaded: true, error: '' };
+          }
+          throw new Error(lastError || 'subs');
+        } catch (err) {
+          return {
+            urls: [],
+            active: 0,
+            authRequired: err.message === 'auth',
+            loaded: false,
+            error: err.message || 'unknown'
+          };
+        }
+      };
+
+      const refreshSubscriptionsUI = async () => {
+        if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey)) {
+          updateBtn.disabled = false;
+          return { urls: [], active: 0, authRequired: true, loaded: false };
+        }
+        const data = await loadSubscriptions();
+        if (data.authRequired) {
+          updateBtn.disabled = false;
+        } else if (!data.loaded) {
+          updateBtn.disabled = false;
+        } else if (!data.urls.length) {
+          updateBtn.disabled = true;
+        } else {
+          updateBtn.disabled = false;
+        }
+        return data;
+      };
+
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      const bootstrapSubscriptionsUI = async () => {
+        // 容器刚启动时 subscriptions.json 可能短暂不可读，做有限重试避免长期停留“读取中”
+        let lastData = { urls: [], active: 0, authRequired: false, loaded: false, error: '' };
+        for (let i = 0; i < 8; i += 1) {
+          const data = await refreshSubscriptionsUI();
+          lastData = data;
+          if (data.authRequired) {
+            return data;
+          }
+          if (data.loaded) {
+            return data;
+          }
+          await sleep(800);
+        }
+        updateBtn.disabled = false;
+        return lastData;
+      };
+
+      openSubs.addEventListener('click', async () => {
+        if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey)) {
+          const ok = await requestAdminKey();
+          if (!ok) {
+            return;
+          }
+        }
+        const data = await refreshSubscriptionsUI();
+        if (data.authRequired) {
+          return;
+        }
+        subsText.value = data.urls.join('\n');
+        setActiveOptions(data.urls, data.active);
+        subsError.style.display = 'none';
+        if (settingsModal.classList.contains('open')) {
+          settingsModal.classList.remove('open');
+          settingsModal.setAttribute('aria-hidden', 'true');
+        }
+        openSubsModal(false);
+      });
+      closeSubs.addEventListener('click', closeSubsModal);
+      subsBackdrop.addEventListener('click', closeSubsModal);
+
+      subsText.addEventListener('input', () => {
+        const urls = normalizeUrls(subsText.value);
+        const activeIndex = Number(subsActive.value || 0);
+        setActiveOptions(urls, activeIndex);
+      });
+
+      saveSubs.addEventListener('click', async () => {
+        const urls = normalizeUrls(subsText.value);
+        const activeIndex = Number(subsActive.value || 0);
+        if (!urls.length) {
+          subsError.textContent = '请至少填写一个订阅链接。';
+          subsError.style.display = 'block';
+          return;
+        }
+        const payload = { active: Math.min(activeIndex, urls.length - 1), urls };
+        saveSubs.textContent = '保存中...';
+        saveSubs.disabled = true;
+        try {
+          const res = await fetchWithAuth('/subscriptions.json', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (!res.ok) throw new Error('save');
+          subsError.style.display = 'none';
+          saveSubs.textContent = '已保存';
+          await refreshSubscriptionsUI();
+          setTimeout(() => {
+            saveSubs.textContent = '保存';
+            saveSubs.disabled = false;
+            subsRequired = false;
+            closeSubs.style.display = '';
+            closeSubsModal();
+          }, 800);
+        } catch (err) {
+          saveSubs.textContent = '保存失败';
+          saveSubs.disabled = false;
+          subsError.textContent = '保存失败，请稍后重试。';
+          subsError.style.display = 'block';
+          setTimeout(() => { saveSubs.textContent = '保存'; }, 1200);
+        }
+      });
+
+      const settingsModal = document.getElementById('settings-modal');
+      const openSettings = document.getElementById('open-settings');
+      const closeSettings = document.getElementById('close-settings');
+      const saveSettings = document.getElementById('save-settings');
+      const settingsBackdrop = document.getElementById('settings-backdrop');
+      const aboutModal = document.getElementById('about-modal');
+      const openAbout = document.getElementById('open-about');
+      const closeAbout = document.getElementById('close-about');
+      const aboutBackdrop = document.getElementById('about-backdrop');
+      const autoEnabledInput = document.getElementById('auto-enabled');
+      const builtinEnabledInput = document.getElementById('builtin-enabled');
+      const autoMinutesInput = document.getElementById('auto-minutes');
+
+      const openModal = () => {
+        settingsModal.classList.add('open');
+        settingsModal.setAttribute('aria-hidden', 'false');
+      };
+      const closeModal = () => {
+        settingsModal.classList.remove('open');
+        settingsModal.setAttribute('aria-hidden', 'true');
+      };
+
+      const loadSettings = async () => {
+        let autoEnabled = true;
+        let builtinEnabled = true;
+        let intervalMinutes = updateIntervalSec ? updateIntervalSec / 60 : 0;
+        let authRequired = false;
+        try {
+          const res = await fetchWithAuth(`/settings.json?t=${Date.now()}`, { cache: 'no-store' });
+          if (res.status === 401 || res.status === 403) throw new Error('auth');
+          if (res.ok) {
+            const data = await res.json();
+            if (typeof data.autoEnabled === 'boolean') {
+              autoEnabled = data.autoEnabled;
+            }
+            if (typeof data.intervalMinutes === 'number') {
+              intervalMinutes = data.intervalMinutes;
+            }
+            if (typeof data.builtinEnabled === 'boolean') {
+              builtinEnabled = data.builtinEnabled;
+            }
+          }
+        } catch (err) {
+          if (err && err.message === 'auth') {
+            authRequired = true;
+          }
+          // keep defaults
+        }
+        if (authRequired) {
+          return { authRequired: true };
+        }
+        autoEnabledInput.checked = autoEnabled;
+        builtinEnabledInput.checked = builtinEnabled;
+        autoMinutesInput.value = intervalMinutes ? String(intervalMinutes) : '0';
+        autoMinutesInput.disabled = !autoEnabled;
+        return { authRequired: false };
+      };
+
+      autoEnabledInput.addEventListener('change', () => {
+        autoMinutesInput.disabled = !autoEnabledInput.checked;
+        if (autoEnabledInput.checked && Number(autoMinutesInput.value) <= 0) {
+          autoMinutesInput.value = updateIntervalSec ? String(updateIntervalSec / 60) : '30';
+        }
+      });
+
+      saveSettings.addEventListener('click', async () => {
+        const payload = {
+          autoEnabled: Boolean(autoEnabledInput.checked),
+          intervalMinutes: Number(autoMinutesInput.value || 0),
+          builtinEnabled: Boolean(builtinEnabledInput.checked)
+        };
+        saveSettings.textContent = '保存中...';
+        saveSettings.disabled = true;
+        try {
+          const res = await fetchWithAuth('/settings.json', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (!res.ok) throw new Error('save');
+          saveSettings.textContent = '已保存';
+          setTimeout(() => {
+            saveSettings.textContent = '保存';
+            saveSettings.disabled = false;
+            closeModal();
+          }, 800);
+        } catch (err) {
+          saveSettings.textContent = '保存失败';
+          setTimeout(() => {
+            saveSettings.textContent = '保存';
+            saveSettings.disabled = false;
+          }, 1200);
+        }
+      });
+
+      openSettings.addEventListener('click', async () => {
+        if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey)) {
+          const ok = await requestAdminKey();
+          if (!ok) {
+            return;
+          }
+        }
+        const settingsState = await loadSettings();
+        if (settingsState.authRequired) {
+          return;
+        }
+        openModal();
+      });
+      closeSettings.addEventListener('click', closeModal);
+      settingsBackdrop.addEventListener('click', closeModal);
+
+      const openAboutModal = async () => {
+        aboutModal.classList.add('open');
+        aboutModal.setAttribute('aria-hidden', 'false');
+        await fetchCoreVersion();
+      };
+      const closeAboutModal = () => {
+        aboutModal.classList.remove('open');
+        aboutModal.setAttribute('aria-hidden', 'true');
+      };
+
+      openAbout.addEventListener('click', openAboutModal);
+      closeAbout.addEventListener('click', closeAboutModal);
+      aboutBackdrop.addEventListener('click', closeAboutModal);
+
+      bootstrapSubscriptionsUI().then((data) => {
+        if (data.loaded && !data.authRequired && !data.urls.length) {
+          subsText.value = '';
+          setActiveOptions([], 0);
+          subsError.textContent = '需要先填写订阅链接才能初始化。';
+          subsError.style.display = 'block';
+          openSubsModal(true);
+        }
+      });
+      applyLatencyModeUI();
+      fetchStatus();
+      fetchSubscriptionInfo();
+      fetchCoreVersion();
+      triggerLatencyRefresh();
+      setInterval(fetchStatus, 30000);
+      setInterval(renderLastUpdate, 60000);
+      setInterval(triggerLatencyRefresh, 30000);
+    </script>
+  </body>
+</html>

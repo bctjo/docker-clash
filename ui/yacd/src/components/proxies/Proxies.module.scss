@@ -1,0 +1,111 @@
+@import '~/styles/utils/custom-media';
+
+.topBar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: var(--color-background2);
+  backdrop-filter: blur(36px);
+
+  & > div {
+    width: 100%;
+  }
+}
+
+.topBarRight {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.textFilterContainer {
+  max-width: 350px;
+  min-width: 150px;
+  flex: 1;
+  margin-right: 8px;
+}
+
+.group {
+  padding: 10px 15px;
+  @media (--breakpoint-not-small) {
+    padding: 10px 40px;
+  }
+}
+
+.groupsContainer {
+  &.doubleColumn {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+
+    @media screen and (min-width: 1200px) {
+      flex-direction: row;
+      align-items: flex-start;
+    }
+
+    .column {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+
+      @media screen and (max-width: 1199px) {
+        display: contents;
+      }
+    }
+
+    .group {
+      @media screen and (min-width: 1200px) {
+        padding: 10px 20px;
+      }
+    }
+  }
+}
+
+.tabsContainer {
+  display: flex;
+  align-items: center;
+  background-color: var(--color-bg-sidebar);
+  border-radius: 12px;
+  padding: 4px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 1em;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  transition: all 0.2s ease;
+  user-select: none;
+
+  &:hover {
+    color: var(--color-text-primary);
+    background: var(--bg-near-transparent);
+  }
+
+  &.active {
+    background-color: var(--color-focus-blue);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(66, 133, 244, 0.3);
+  }
+}
+
+.tabCount {
+  font-family: var(--font-normal);
+  font-size: 0.7em;
+  margin-left: 6px;
+  padding: 2px 8px;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  font-weight: 600;
+  min-width: 20px;
+}

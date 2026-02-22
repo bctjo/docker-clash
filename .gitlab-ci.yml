@@ -1,0 +1,70 @@
+stages:
+  - lint
+  - build
+
+# 默认使用 GitLab 自带的 Container Registry。
+# 如果你要推送到自建 Registry，请在 GitLab CI/CD Variables 中设置：
+# CI_REGISTRY / CI_REGISTRY_USER / CI_REGISTRY_PASSWORD
+variables:
+  DOCKER_DRIVER: overlay2
+  # 避免 DinD 在共享 Runner 上的 TLS 问题（也可改为启用 TLS）
+  DOCKER_TLS_CERTDIR: ""
+  # 可选：在 GitLab CI/CD Variables 中配置以下变量后可登录 Docker Hub
+  # DOCKERHUB_USERNAME / DOCKERHUB_TOKEN
+
+lint_bash_syntax:
+  stage: lint
+  image: bash:5.2
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - bash -n entrypoint.sh
+    - bash -n scripts/*.sh
+
+lint_compose_config:
+  stage: lint
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      command: ["--tls=false"]
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - docker compose -f docker-compose.yml config -q
+    - docker compose -f docker-compose.dev.yml config -q
+
+build_image:
+  stage: build
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      command: ["--tls=false"]
+  rules:
+    # 仅在版本 tag（v*）时构建并推送镜像
+    - if: '$CI_COMMIT_TAG =~ /^v.*/'
+    - when: never
+  before_script:
+    - |
+      if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+        echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+      else
+        echo "DOCKERHUB_USERNAME or DOCKERHUB_TOKEN not set, skip Docker Hub login."
+      fi
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - |
+      set -e
+      IMAGE_GITLAB="$CI_REGISTRY_IMAGE"
+      TAG_VER="${CI_COMMIT_TAG#v}"
+
+      docker build \
+        -t "$IMAGE_GITLAB:$TAG_VER" \
+        -t "$IMAGE_GITLAB:latest" \
+        .
+
+      docker push "$IMAGE_GITLAB:$TAG_VER"
+      docker push "$IMAGE_GITLAB:latest"

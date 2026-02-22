@@ -1,0 +1,34 @@
+@import '~/styles/utils/custom-media';
+
+.root {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  padding: 0 15px;
+
+  @media (max-width: 768px) {
+    min-height: 48px;
+    height: auto;
+    padding: 5px 10px;
+    flex-wrap: wrap;
+  }
+
+  @media (--breakpoint-not-small) {
+    padding: 0 40px;
+  }
+}
+
+.h1 {
+  white-space: nowrap;
+  font-size: 1.7em;
+
+  @media (max-width: 768px) {
+    font-size: 1.4em;
+  }
+
+  @media (--breakpoint-not-small) {
+    font-size: 2em;
+  }
+  text-align: left;
+  margin: 0;
+}
