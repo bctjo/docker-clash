@@ -1048,7 +1048,7 @@
           const data = await res.json();
           if (!data.hasInfo) {
             renderSubscriptionInfoUnknown(data.message || '订阅未返回流量信息');
-            return;
+            return false;
           }
           const remaining = Number(data.remainingBytes || 0);
           const total = Number(data.totalBytes || 0);
@@ -1060,8 +1060,10 @@
           subUsagePercentEl.textContent = `${remainingPercent}%`;
           subUsageNumbersEl.textContent = `剩余 ${formatBytes(remaining)} / 总量 ${formatBytes(total)}`;
           subExpireEl.textContent = `到期 ${formatExpireDate(data.expireAtShanghai)}`;
+          return true;
         } catch (err) {
           renderSubscriptionInfoUnknown('读取订阅流量信息失败');
+          return false;
         }
       };
 
@@ -1486,10 +1488,20 @@
         }
         applyLatencyModeUI();
         fetchStatus();
-        fetchSubscriptionInfo();
+        const hasSubscriptionInfo = await fetchSubscriptionInfo();
+        if (!hasSubscriptionInfo) {
+          // 初始化阶段如果后端还没写入流量信息，短周期重试，尽快从 waiting 状态恢复
+          for (let i = 0; i < 6; i += 1) {
+            await sleep(5000);
+            if (await fetchSubscriptionInfo()) {
+              break;
+            }
+          }
+        }
         fetchCoreVersion();
         triggerLatencyRefresh();
         setInterval(fetchStatus, 30000);
+        setInterval(fetchSubscriptionInfo, 30000);
         setInterval(renderLastUpdate, 60000);
         setInterval(triggerLatencyRefresh, 30000);
       };
