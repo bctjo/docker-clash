@@ -41,6 +41,10 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+            APP_REVISION=${{ github.sha }}
+            APP_SOURCE=${{ github.server_url }}/${{ github.repository }}
           tags: |
             ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.version }}
             ${{ env.IMAGE_NAME }}:latest

@@ -1,5 +1,9 @@
 FROM debian:12-slim
 
+ARG APP_VERSION="dev"
+ARG APP_REVISION="unknown"
+ARG APP_SOURCE="https://github.com/bctjo/docker-clash"
+
 # 切换 APT 源为 USTC（Debian 12 / bookworm，.sources 格式）
 RUN sed -i 's@deb.debian.org@mirrors.ustc.edu.cn@g' /etc/apt/sources.list.d/debian.sources && \
     sed -i 's@security.debian.org@mirrors.ustc.edu.cn@g' /etc/apt/sources.list.d/debian.sources && \
@@ -29,7 +33,13 @@ RUN set -eux; \
     mkdir -p /opt/ui/metacubexd /opt/ui/zashboard /opt/ui/yacd /opt/portal; \
     curl -fsSL "https://codeload.github.com/${METACUBEXD_REPO}/tar.gz/refs/heads/${METACUBEXD_REF}" | tar -xzf - -C /opt/ui/metacubexd --strip-components=1; \
     curl -fsSL "https://codeload.github.com/${ZASHBOARD_REPO}/tar.gz/refs/heads/${ZASHBOARD_REF}" | tar -xzf - -C /opt/ui/zashboard --strip-components=1; \
-    curl -fsSL "https://codeload.github.com/${YACD_REPO}/tar.gz/refs/heads/${YACD_REF}" | tar -xzf - -C /opt/ui/yacd --strip-components=1
+    curl -fsSL "https://codeload.github.com/${YACD_REPO}/tar.gz/refs/heads/${YACD_REF}" | tar -xzf - -C /opt/ui/yacd --strip-components=1; \
+    BUILD_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+    VERSION_OUT="$APP_VERSION"; \
+    REVISION_OUT="$APP_REVISION"; \
+    [ "$VERSION_OUT" = "dev" ] && VERSION_OUT="dev-${BUILD_AT}"; \
+    [ "$REVISION_OUT" = "unknown" ] && REVISION_OUT=""; \
+    printf '{"version":"%s","revision":"%s","source":"%s","builtAt":"%s"}\n' "$VERSION_OUT" "$REVISION_OUT" "$APP_SOURCE" "$BUILD_AT" > /opt/portal/project-version.json
 
 # 快捷入口页面
 COPY portal/index.html /opt/portal/index.html

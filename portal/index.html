@@ -613,6 +613,9 @@
               <h2 className="mb-3 text-base font-semibold">关于</h2>
               <div className="grid gap-2.5 text-sm">
                 <p style=${{ color: 'var(--muted)' }}>
+                  项目版本：<span id="about-project-version" className="font-mono" style=${{ color: 'var(--text)' }}>--</span>
+                </p>
+                <p style=${{ color: 'var(--muted)' }}>
                   Mihomo内核版本：<span id="about-core-version" className="font-mono" style=${{ color: 'var(--text)' }}>--</span>
                 </p>
                 <a href="https://github.com/MetaCubeX/mihomo" target="_blank" rel="noreferrer"
@@ -777,6 +780,7 @@
       const subUsagePercentEl = document.getElementById('sub-usage-percent');
       const subUsageNumbersEl = document.getElementById('sub-usage-numbers');
       const subExpireEl = document.getElementById('sub-expire');
+      const aboutProjectVersionEl = document.getElementById('about-project-version');
       const aboutCoreVersionEl = document.getElementById('about-core-version');
       const latencyModeBtn = document.getElementById('toggle-latency-mode');
       const latencyModeIcon = document.getElementById('latency-mode-icon');
@@ -1081,6 +1085,21 @@
           aboutCoreVersionEl.textContent = version;
         } catch (err) {
           aboutCoreVersionEl.textContent = '--';
+        }
+      };
+
+      const fetchProjectVersion = async () => {
+        if (!aboutProjectVersionEl) return;
+        try {
+          const res = await fetch(`/project-version.json?t=${Date.now()}`, { cache: 'no-store' });
+          if (!res.ok) throw new Error('project-version');
+          const data = await res.json();
+          const version = (typeof data.version === 'string' && data.version.trim()) ? data.version.trim() : '--';
+          const revisionRaw = (typeof data.revision === 'string') ? data.revision.trim() : '';
+          const revision = revisionRaw && revisionRaw !== 'unknown' ? revisionRaw.slice(0, 12) : '';
+          aboutProjectVersionEl.textContent = revision ? `${version} (${revision})` : version;
+        } catch (err) {
+          aboutProjectVersionEl.textContent = '--';
         }
       };
 
@@ -1454,7 +1473,7 @@
       const openAboutModal = async () => {
         aboutModal.classList.add('open');
         aboutModal.setAttribute('aria-hidden', 'false');
-        await fetchCoreVersion();
+        await Promise.all([fetchCoreVersion(), fetchProjectVersion()]);
       };
       const closeAboutModal = () => {
         aboutModal.classList.remove('open');
