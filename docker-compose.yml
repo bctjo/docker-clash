@@ -15,14 +15,14 @@ services:
     networks:
       - clash_net
     environment:
-      PORTAL_PORT: "9090"        # Portal port (default 9090)
-      DASH_PORT: "9097"          # Clash external-controller (default 9097)
-      PORTAL_ADMIN_KEY: "your_password"       # Portal basic auth password
-      GEODATA_AUTO_UPDATE: "true"   # Geodata auto update (set "false" for manual files only)
-      # CLASH_HTTP_PORT: "7890"    # HTTP proxy port (default 7890)
-      # CLASH_SOCKS_PORT: "7891"   # SOCKS5 proxy port (default 7891)
-      # CLASH_TPROXY_PORT: "7892"  # TPROXY port (default 7892)
-      # CLASH_MIXED_PORT: "7893"   # MIXED port (default 7893)
+      PORTAL_ADMIN_KEY: "your_password"       # Portal 基础认证密码（注释则不启用）
+      GEODATA_AUTO_UPDATE: "true"   # Geodata 自动更新（设为 "false" 时仅使用手动文件）
+      # PORTAL_PORT: "9090"        # Portal 端口（默认 9090）
+      # DASH_PORT: "9097"          # Clash external-controller 端口（默认 9097）
+      # CLASH_HTTP_PORT: "7890"    # HTTP 代理端口（默认 7890）
+      # CLASH_SOCKS_PORT: "7891"   # SOCKS5 代理端口（默认 7891）
+      # CLASH_TPROXY_PORT: "7892"  # TPROXY 端口（默认 7892）
+      # CLASH_MIXED_PORT: "7893"   # MIXED 端口（默认 7893）
 
 networks:
   clash_net:
