@@ -24,6 +24,7 @@ MMDB_URL="https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/cou
 GEOSITE_URL="${GEOSITE_URL:-https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat}"
 GEOIP_URL="${GEOIP_URL:-https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat}"
 GEODATA_MAX_AGE="${GEODATA_MAX_AGE:-604800}"
+GEODATA_AUTO_UPDATE="${GEODATA_AUTO_UPDATE:-true}"
 CONFIG_TEST_MAX_RETRY="${CONFIG_TEST_MAX_RETRY:-1}"
 PORTAL_CONF="/etc/nginx/conf.d/portal.conf"
 PORTAL_CONF_TEMPLATE="/etc/nginx/conf.d/portal.conf.template"
@@ -110,6 +111,17 @@ download_if_stale() {
     fi
 
     download_with_fallback "$file" "$label" "$@"
+}
+
+is_geodata_auto_update_enabled() {
+    case "${GEODATA_AUTO_UPDATE,,}" in
+        1|true|yes|on)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 # ========= 函数：生成 Secret 并持久化 =========
@@ -737,6 +749,10 @@ validate_generated_config() {
             log "validate: $line"
         done
 
+        if ! is_geodata_auto_update_enabled; then
+            return 1
+        fi
+
         if [[ "$retry" -lt "$CONFIG_TEST_MAX_RETRY" ]] && printf '%s' "$output" | grep -Eqi 'GeoSite|geosite'; then
             retry=$((retry + 1))
             log "GeoSite issue detected. Force refreshing GeoSite.dat (retry=$retry)..."
@@ -755,6 +771,11 @@ validate_generated_config() {
 
 update_geodata_resources() {
     local mmdb_max_age=86400
+
+    if ! is_geodata_auto_update_enabled; then
+        log "GEODATA_AUTO_UPDATE disabled. Skip geodata prefetch."
+        return 0
+    fi
 
     log "Preparing geodata resources at container startup..."
     if ! download_if_stale "$MMDB_FILE" "$mmdb_max_age" "Country.mmdb" \

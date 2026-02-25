@@ -19,6 +19,7 @@ services:
       PORTAL_PORT: "9090"        # Portal port (default 9090)
       DASH_PORT: "9097"          # Clash external-controller (default 9097)
       PORTAL_ADMIN_KEY: "your_password" # Portal basic auth password
+      GEODATA_AUTO_UPDATE: "true" # Geodata auto update (set "false" for manual files only)
       # CLASH_HTTP_PORT: "7890"    # HTTP proxy port (default 7890)
       # CLASH_SOCKS_PORT: "7891"   # SOCKS5 proxy port (default 7891)
       # CLASH_TPROXY_PORT: "7892"  # TPROXY port (default 7892)
