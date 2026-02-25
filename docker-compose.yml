@@ -3,7 +3,6 @@ services:
     image: ghcr.nju.edu.cn/bctjo/docker-clash:latest
     container_name: clash
     restart: unless-stopped
-    network_mode: host
     volumes:
       - ./data:/root/.config/clash
     ports:
@@ -13,6 +12,8 @@ services:
       - "7891:7891" # SOCKS5
       - "7892:7892" # TPROXY
       - "7893:7893" # MIXED
+    networks:
+      - clash_net
     environment:
       PORTAL_PORT: "9090"        # Portal port (default 9090)
       DASH_PORT: "9097"          # Clash external-controller (default 9097)
@@ -22,3 +23,8 @@ services:
       # CLASH_SOCKS_PORT: "7891"   # SOCKS5 proxy port (default 7891)
       # CLASH_TPROXY_PORT: "7892"  # TPROXY port (default 7892)
       # CLASH_MIXED_PORT: "7893"   # MIXED port (default 7893)
+
+networks:
+  clash_net:
+    driver: bridge
+    enable_ipv6: false
