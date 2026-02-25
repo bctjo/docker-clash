@@ -71,13 +71,18 @@ download_with_fallback() {
     local label="$2"
     shift 2
     local url
+    local max_time=60
+
+    if [[ "$label" == "GeoIP.dat" ]]; then
+        max_time=180
+    fi
 
     for url in "$@"; do
         if [[ -z "$url" ]]; then
             continue
         fi
         log "Downloading $label from: $url"
-        if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 60 "$url" -o "$file.tmp"; then
+        if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time "$max_time" "$url" -o "$file.tmp"; then
             if [[ ! -s "$file.tmp" ]]; then
                 log "WARNING: $label download empty from $url."
                 rm -f "$file.tmp"
