@@ -1,0 +1,90 @@
+name: Auto Release On Mihomo Update
+
+on:
+  schedule:
+    - cron: "19 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-release-mihomo
+  cancel-in-progress: false
+
+jobs:
+  auto-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check mihomo update
+        id: check
+        run: |
+          set -euo pipefail
+          tracked_file="core/mihomo-version.txt"
+          latest_tag="$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | sed -n 's/^[[:space:]]*\"tag_name\": \"\([^\"]*\)\",/\1/p' | head -n1)"
+          current_tag=""
+
+          if [[ -f "${tracked_file}" ]]; then
+            current_tag="$(tr -d '[:space:]' < "${tracked_file}")"
+          fi
+
+          if [[ -z "${latest_tag}" || "${latest_tag}" == "null" ]]; then
+            echo "Failed to resolve latest mihomo tag" >&2
+            exit 1
+          fi
+
+          if [[ "${latest_tag}" == "${current_tag}" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
+            echo "No mihomo update detected (${latest_tag})"
+            exit 0
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Derive next project tag
+        id: next
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          latest_project_tag="$(git tag --list 'v*' | sort -V | tail -n1)"
+
+          if [[ -z "${latest_project_tag}" ]]; then
+            next_tag="v1.0.0"
+          else
+            if [[ ! "${latest_project_tag}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              echo "Latest project tag format is invalid: ${latest_project_tag}" >&2
+              exit 1
+            fi
+
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            next_patch=$((patch + 1))
+            next_tag="v${major}.${minor}.${next_patch}"
+          fi
+
+          echo "next_tag=${next_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit tracked mihomo tag and push new project tag
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p core
+          printf '%s\n' "${{ steps.check.outputs.latest_tag }}" > core/mihomo-version.txt
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add core/mihomo-version.txt
+          git commit -m "chore(core): track mihomo ${{ steps.check.outputs.latest_tag }}"
+
+          git tag "${{ steps.next.outputs.next_tag }}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "${{ steps.next.outputs.next_tag }}"

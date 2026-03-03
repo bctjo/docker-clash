@@ -78,9 +78,20 @@ docker compose up -d
 
 迁移或备份时保留该目录即可。
 
+## 自动发布（mihomo 更新驱动）
+
+- Workflow `Auto Release On Mihomo Update` 会每 6 小时检查一次 `MetaCubeX/mihomo` 最新版本。
+- 若有更新，会把 `core/mihomo-version.txt` 更新为最新内核版本，并自动把项目 tag 的补丁位加 1（例如 `v1.0.7 -> v1.0.8`），随后触发发布流程。
+- 发布构建时会优先读取 `core/mihomo-version.txt`，确保镜像内核版本可追溯。
+
 ## 本地构建（可选）
 
 如果你想自己构建镜像：
+
+先准备 `core/` 下的两个核心文件（解压后可执行文件）：
+
+- `core/clash-linux-amd64`
+- `core/clash-linux-arm64`
 
 ```bash
 docker compose -f docker-compose.dev.yml up --build

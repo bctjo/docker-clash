@@ -76,7 +76,17 @@ jobs:
       - name: Download mihomo cores (official GitHub)
         run: |
           set -euo pipefail
-          tag="$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | sed -n 's/^[[:space:]]*\"tag_name\": \"\([^\"]*\)\",/\1/p' | head -n1)"
+          tracked_tag=""
+          if [[ -f core/mihomo-version.txt ]]; then
+            tracked_tag="$(tr -d '[:space:]' < core/mihomo-version.txt)"
+          fi
+
+          if [[ -n "${tracked_tag}" ]]; then
+            tag="${tracked_tag}"
+          else
+            tag="$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | sed -n 's/^[[:space:]]*\"tag_name\": \"\([^\"]*\)\",/\1/p' | head -n1)"
+          fi
+
           if [[ -z "${tag}" || "${tag}" == "null" ]]; then
             echo "Failed to resolve mihomo release tag" >&2
             exit 1
