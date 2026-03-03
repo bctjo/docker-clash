@@ -4,6 +4,17 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Override image tag (default: manual-<shortsha>)"
+        required: false
+        type: string
+      push_latest:
+        description: "Also push :latest tag"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -24,7 +35,33 @@ jobs:
       - name: Derive version tag
         id: vars
         run: |
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            push_latest="true"
+          else
+            version="${{ inputs.image_tag }}"
+            if [[ -z "$version" ]]; then
+              version="manual-${GITHUB_SHA::7}"
+            fi
+            push_latest="${{ inputs.push_latest }}"
+          fi
+
+          tags="${IMAGE_NAME}:${version}"
+          if [[ "$push_latest" == "true" ]]; then
+            tags="${tags}"$'\n'"${IMAGE_NAME}:latest"
+          fi
+
+          {
+            echo "version=${version}"
+            echo "tags<<EOF"
+            echo "${tags}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -36,21 +73,38 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download mihomo cores (official GitHub)
+        run: |
+          set -euo pipefail
+          tag="$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | sed -n 's/^[[:space:]]*\"tag_name\": \"\([^\"]*\)\",/\1/p' | head -n1)"
+          if [[ -z "${tag}" || "${tag}" == "null" ]]; then
+            echo "Failed to resolve mihomo release tag" >&2
+            exit 1
+          fi
+
+          mkdir -p core
+          curl -fL "https://github.com/MetaCubeX/mihomo/releases/download/${tag}/mihomo-linux-amd64-compatible-${tag}.gz" -o /tmp/mihomo-linux-amd64.gz
+          curl -fL "https://github.com/MetaCubeX/mihomo/releases/download/${tag}/mihomo-linux-arm64-${tag}.gz" -o /tmp/mihomo-linux-arm64.gz
+          gunzip -c /tmp/mihomo-linux-amd64.gz > core/clash-linux-amd64
+          gunzip -c /tmp/mihomo-linux-arm64.gz > core/clash-linux-arm64
+          chmod +x core/clash-linux-amd64 core/clash-linux-arm64
+          file core/clash-linux-amd64 core/clash-linux-arm64
+
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           build-args: |
-            APP_VERSION=${{ github.ref_name }}
+            APP_VERSION=${{ steps.vars.outputs.version }}
             APP_REVISION=${{ github.sha }}
             APP_SOURCE=${{ github.server_url }}/${{ github.repository }}
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.version }}
-            ${{ env.IMAGE_NAME }}:latest
+          tags: ${{ steps.vars.outputs.tags }}
 
   release:
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: docker
     steps:
       - name: Checkout

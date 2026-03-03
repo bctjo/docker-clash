@@ -3,6 +3,7 @@ FROM debian:12-slim
 ARG APP_VERSION="dev"
 ARG APP_REVISION="unknown"
 ARG APP_SOURCE="https://github.com/bctjo/docker-clash"
+ARG TARGETARCH
 
 # 切换 APT 源为 USTC（Debian 12 / bookworm，.sources 格式）
 RUN sed -i 's@deb.debian.org@mirrors.ustc.edu.cn@g' /etc/apt/sources.list.d/debian.sources && \
@@ -18,8 +19,8 @@ RUN sed -i 's@deb.debian.org@mirrors.ustc.edu.cn@g' /etc/apt/sources.list.d/debi
     rm -f /etc/nginx/sites-enabled/default && \
     rm -rf /var/lib/apt/lists/*
 
-# mihomo 内核（命名为 clash，entrypoint 无需改）
-COPY clash /usr/bin/clash
+# mihomo 内核（按架构选择，命名为 clash，entrypoint 无需改）
+COPY core/clash-linux-${TARGETARCH} /usr/bin/clash
 
 # UI（external-ui）
 ARG METACUBEXD_REPO="MetaCubeX/metacubexd"
