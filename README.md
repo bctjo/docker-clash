@@ -51,6 +51,8 @@ docker compose up -d
 容器启动与更新流程包含以下保护机制：
 
 - geodata 预下载（`Country.mmdb` / `GeoSite.dat` / `GeoIP.dat`）
+- 构建阶段内置 geodata，弱网首启可直接使用镜像内文件
+- 首次启动 geodata 下载失败/超时会自动熔断本次自动更新，避免反复重试阻塞
 - 配置应用前执行 `clash -t` 校验
 - 下载失败自动重试与多源回退
 - 更新失败自动回滚到可用文件

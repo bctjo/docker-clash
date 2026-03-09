@@ -17,7 +17,7 @@ services:
       - "7893:7893" # MIXED
     environment:
       PORTAL_ADMIN_KEY: "your_password" # Portal 基础认证密码（注释则不启用）
-      GEODATA_AUTO_UPDATE: "true" # Geodata 自动更新（设为 "false" 时仅使用手动文件）
+      GEODATA_AUTO_UPDATE: "true"   # Geodata 自动更新（首启下载失败/超时会自动熔断本次运行）
       # PORTAL_PORT: "9090"        # Portal 端口（默认 9090）
       # DASH_PORT: "9097"          # Clash external-controller 端口（默认 9097）
       # CLASH_HTTP_PORT: "7890"    # HTTP 代理端口（默认 7890）

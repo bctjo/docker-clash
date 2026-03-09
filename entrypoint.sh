@@ -50,6 +50,8 @@ DEBUG_RAW_CONFIG="$CONFIG_DIR/config.raw.yaml"
 LATENCY_BROWSER_PROBE_SCRIPT="/opt/scripts/connectivity_probe.sh"
 LATENCY_ROUTER_PROBE_SCRIPT="/opt/scripts/proxy_connectivity_probe.sh"
 BUILTIN_RULE_FILE="${BUILTIN_RULE_FILE:-/opt/builtin-rules.yaml}"
+IMAGE_GEODATA_DIR="${IMAGE_GEODATA_DIR:-/opt/geodata}"
+FIRST_START_MARKER="$CONFIG_DIR/.first-start.done"
 
 mkdir -p "$CONFIG_DIR" "$TMP_DIR"
 
@@ -127,6 +129,32 @@ is_geodata_auto_update_enabled() {
             return 1
             ;;
     esac
+}
+
+seed_geodata_from_image() {
+    local seeded=0
+
+    [[ -d "$IMAGE_GEODATA_DIR" ]] || return 0
+
+    if [[ ! -s "$MMDB_FILE" && -s "$IMAGE_GEODATA_DIR/Country.mmdb" ]]; then
+        cp "$IMAGE_GEODATA_DIR/Country.mmdb" "$MMDB_FILE"
+        log "Seeded Country.mmdb from image."
+        seeded=1
+    fi
+    if [[ ! -s "$GEOSITE_FILE" && -s "$IMAGE_GEODATA_DIR/GeoSite.dat" ]]; then
+        cp "$IMAGE_GEODATA_DIR/GeoSite.dat" "$GEOSITE_FILE"
+        log "Seeded GeoSite.dat from image."
+        seeded=1
+    fi
+    if [[ ! -s "$GEOIP_FILE" && -s "$IMAGE_GEODATA_DIR/GeoIP.dat" ]]; then
+        cp "$IMAGE_GEODATA_DIR/GeoIP.dat" "$GEOIP_FILE"
+        log "Seeded GeoIP.dat from image."
+        seeded=1
+    fi
+
+    if [[ "$seeded" -eq 1 ]]; then
+        chmod 644 "$MMDB_FILE" "$GEOSITE_FILE" "$GEOIP_FILE" 2>/dev/null || true
+    fi
 }
 
 # ========= 函数：生成 Secret 并持久化 =========
@@ -776,31 +804,49 @@ validate_generated_config() {
 
 update_geodata_resources() {
     local mmdb_max_age=86400
+    local prefetch_failed=0
+    local first_start=0
+
+    if [[ ! -f "$FIRST_START_MARKER" ]]; then
+        first_start=1
+    fi
 
     if ! is_geodata_auto_update_enabled; then
         log "GEODATA_AUTO_UPDATE disabled. Skip geodata prefetch."
+        touch "$FIRST_START_MARKER" 2>/dev/null || true
         return 0
     fi
 
+    seed_geodata_from_image
     log "Preparing geodata resources at container startup..."
     if ! download_if_stale "$MMDB_FILE" "$mmdb_max_age" "Country.mmdb" \
         "$MMDB_URL" \
         "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/country.mmdb" \
         "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/country.mmdb"; then
         log "WARNING: Country.mmdb prefetch failed."
+        prefetch_failed=1
     fi
     if ! download_if_stale "$GEOSITE_FILE" "$GEODATA_MAX_AGE" "GeoSite.dat" \
         "$GEOSITE_URL" \
         "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geosite.dat" \
         "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/geosite.dat"; then
         log "WARNING: GeoSite.dat prefetch failed."
+        prefetch_failed=1
     fi
     if ! download_if_stale "$GEOIP_FILE" "$GEODATA_MAX_AGE" "GeoIP.dat" \
         "$GEOIP_URL" \
         "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geoip.dat" \
         "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/geoip.dat"; then
         log "WARNING: GeoIP.dat prefetch failed."
+        prefetch_failed=1
     fi
+
+    if [[ "$first_start" -eq 1 && "$prefetch_failed" -eq 1 ]]; then
+        GEODATA_AUTO_UPDATE="false"
+        log "First startup geodata prefetch failed/timeout. Auto disabling GEODATA_AUTO_UPDATE for this run."
+    fi
+
+    touch "$FIRST_START_MARKER" 2>/dev/null || true
 }
 
 # ========= 函数：执行更新任务 =========

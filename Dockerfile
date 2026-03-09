@@ -42,6 +42,37 @@ RUN set -eux; \
     [ "$REVISION_OUT" = "unknown" ] && REVISION_OUT=""; \
     printf '{"version":"%s","revision":"%s","source":"%s","builtAt":"%s"}\n' "$VERSION_OUT" "$REVISION_OUT" "$APP_SOURCE" "$BUILD_AT" > /opt/portal/project-version.json
 
+# 构建阶段预置 geodata，供弱网首启兜底
+RUN set -eux; \
+    mkdir -p /opt/geodata; \
+    download_geodata() { \
+      target="$1"; shift; \
+      for url in "$@"; do \
+        [ -n "$url" ] || continue; \
+        if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 180 "$url" -o "${target}.tmp"; then \
+          if [ -s "${target}.tmp" ]; then \
+            mv "${target}.tmp" "$target"; \
+            return 0; \
+          fi; \
+          rm -f "${target}.tmp"; \
+        fi; \
+      done; \
+      rm -f "${target}.tmp"; \
+      return 1; \
+    }; \
+    download_geodata /opt/geodata/Country.mmdb \
+      "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb" \
+      "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/country.mmdb" \
+      "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/country.mmdb"; \
+    download_geodata /opt/geodata/GeoSite.dat \
+      "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat" \
+      "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geosite.dat" \
+      "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/geosite.dat"; \
+    download_geodata /opt/geodata/GeoIP.dat \
+      "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat" \
+      "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geoip.dat" \
+      "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/geoip.dat"
+
 # 快捷入口页面
 COPY portal/index.html /opt/portal/index.html
 COPY portal/vendor /opt/portal/vendor
