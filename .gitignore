@@ -3,3 +3,6 @@
 
 # 数据文件夹
 data/
+
+# 本地下载的 mihomo 内核（构建时自动下载，不入库）
+core/clash-linux-*

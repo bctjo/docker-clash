@@ -4,6 +4,8 @@ ARG APP_VERSION="dev"
 ARG APP_REVISION="unknown"
 ARG APP_SOURCE="https://github.com/bctjo/docker-clash"
 ARG TARGETARCH
+ARG MIHOMO_REPO="MetaCubeX/mihomo"
+ARG MIHOMO_VERSION=""
 
 # 切换 APT 源为 USTC（Debian 12 / bookworm，.sources 格式）
 RUN sed -i 's@deb.debian.org@mirrors.ustc.edu.cn@g' /etc/apt/sources.list.d/debian.sources && \
@@ -19,8 +21,28 @@ RUN sed -i 's@deb.debian.org@mirrors.ustc.edu.cn@g' /etc/apt/sources.list.d/debi
     rm -f /etc/nginx/sites-enabled/default && \
     rm -rf /var/lib/apt/lists/*
 
-# mihomo 内核（按架构选择，命名为 clash，entrypoint 无需改）
-COPY core/clash-linux-${TARGETARCH} /usr/bin/clash
+# 使用仓库追踪版本（可被 --build-arg MIHOMO_VERSION 覆盖）
+COPY core/mihomo-version.txt /tmp/mihomo-version.txt
+
+# mihomo 内核（构建时按架构下载，命名为 clash，entrypoint 无需改）
+RUN set -eux; \
+    tag="${MIHOMO_VERSION}"; \
+    if [ -z "$tag" ]; then \
+      tag="$(tr -d '[:space:]' </tmp/mihomo-version.txt)"; \
+    fi; \
+    if [ -z "$tag" ]; then \
+      echo "MIHOMO_VERSION is empty and core/mihomo-version.txt has no version" >&2; \
+      exit 1; \
+    fi; \
+    case "$TARGETARCH" in \
+      amd64) asset="mihomo-linux-amd64-compatible-${tag}.gz" ;; \
+      arm64) asset="mihomo-linux-arm64-${tag}.gz" ;; \
+      *) echo "Unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    url="https://github.com/${MIHOMO_REPO}/releases/download/${tag}/${asset}"; \
+    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 180 "$url" -o /tmp/mihomo.gz; \
+    gzip -dc /tmp/mihomo.gz > /usr/bin/clash; \
+    rm -f /tmp/mihomo.gz /tmp/mihomo-version.txt
 
 # UI（external-ui）
 ARG METACUBEXD_REPO="MetaCubeX/metacubexd"

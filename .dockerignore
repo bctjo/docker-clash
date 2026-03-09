@@ -1,0 +1,7 @@
+.git
+.gitignore
+.DS_Store
+data/
+
+# 本地内核不传入构建上下文
+core/clash-linux-*

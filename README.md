@@ -90,10 +90,13 @@ docker compose up -d
 
 如果你想自己构建镜像：
 
-先准备 `core/` 下的两个核心文件（解压后可执行文件）：
+默认会在构建时自动下载 mihomo 内核，版本来自 `core/mihomo-version.txt`。
 
-- `core/clash-linux-amd64`
-- `core/clash-linux-arm64`
+你也可以通过构建参数临时覆盖版本：
+
+```bash
+docker build --build-arg MIHOMO_VERSION=v1.19.20 -t clash-meta-dev:local .
+```
 
 ```bash
 docker compose -f docker-compose.dev.yml up --build
