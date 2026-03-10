@@ -41,10 +41,14 @@ SETTINGS_FILE="$CONFIG_DIR/settings.json"
 SETTINGS_PUBLIC="/opt/portal/settings.json"
 SUBSCRIPTIONS_FILE="$CONFIG_DIR/subscriptions.json"
 SUBSCRIPTIONS_PUBLIC="/opt/portal/subscriptions.json"
+SUBS_CACHE_DIR="$CONFIG_DIR/proxies"
 PORTAL_AUTH_FILE="/etc/nginx/.portal_htpasswd"
 PORTAL_UPDATE_TRIGGER="/opt/portal/update"
 PORTAL_LATENCY_BROWSER_TRIGGER="/opt/portal/latency-browser-refresh"
 PORTAL_LATENCY_ROUTER_TRIGGER="/opt/portal/latency-router-refresh"
+PORTAL_SUB_VALIDATE_TRIGGER="/opt/portal/subscription-validate"
+PORTAL_SUB_VALIDATE_RESULT_FILE="$CONFIG_DIR/subscription-validate.json"
+PORTAL_SUB_VALIDATE_RESULT_PUBLIC="/opt/portal/subscription-validate.json"
 PORTAL_STATE_FILE="$CONFIG_DIR/portal.json"
 DEBUG_RAW_CONFIG="$CONFIG_DIR/config.raw.yaml"
 LATENCY_BROWSER_PROBE_SCRIPT="/opt/scripts/connectivity_probe.sh"
@@ -52,8 +56,10 @@ LATENCY_ROUTER_PROBE_SCRIPT="/opt/scripts/proxy_connectivity_probe.sh"
 BUILTIN_RULE_FILE="${BUILTIN_RULE_FILE:-/opt/builtin-rules.yaml}"
 IMAGE_GEODATA_DIR="${IMAGE_GEODATA_DIR:-/opt/geodata}"
 FIRST_START_MARKER="$CONFIG_DIR/.first-start.done"
+CURRENT_ACTIVE_INDEX=0
 
 mkdir -p "$CONFIG_DIR" "$TMP_DIR"
+mkdir -p "$SUBS_CACHE_DIR"
 
 # ========= 函数：日志 =========
 log() {
@@ -188,6 +194,23 @@ escape_json() {
     printf '%s' "$1" | awk 'BEGIN{RS=""; ORS=""} {gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); gsub(/\r/,"\\r"); gsub(/\n/,"\\n"); print}'
 }
 
+decode_percent_text() {
+    local text="$1"
+    local escaped=""
+    local decoded=""
+    if [[ "$text" != *%* ]]; then
+        printf '%s' "$text"
+        return 0
+    fi
+    escaped=$(printf '%s' "$text" | sed -E 's/%([0-9A-Fa-f]{2})/\\x\1/g')
+    decoded=$(printf '%b' "$escaped" 2>/dev/null || true)
+    if [[ -n "$decoded" ]]; then
+        printf '%s' "$decoded"
+    else
+        printf '%s' "$text"
+    fi
+}
+
 write_portal_config() {
     local DASH_PORT_ESC
     local PORTAL_PORT_ESC
@@ -284,10 +307,31 @@ init_subscriptions() {
 
 load_subscriptions() {
     local source="$SUBSCRIPTIONS_PUBLIC"
-    local urls_raw
     local active
+    local -a parsed_urls=()
+    local -a cleaned_urls=()
+    local -a unique_urls=()
+    local url
+    local existing
+    local normalized_url
+    local duplicate
+    local idx
+    local parsed_active=0
 
     SUBS_URLS_ARRAY=()
+    SUBS_NAMES_ARRAY=()
+    SUBS_UPDATED_ARRAY=()
+    SUBS_ERRORS_ARRAY=()
+    SUBS_INFO_HAS_ARRAY=()
+    SUBS_INFO_TOTAL_ARRAY=()
+    SUBS_INFO_UPLOAD_ARRAY=()
+    SUBS_INFO_DOWNLOAD_ARRAY=()
+    SUBS_INFO_USED_ARRAY=()
+    SUBS_INFO_REMAINING_ARRAY=()
+    SUBS_INFO_USED_PERCENT_ARRAY=()
+    SUBS_INFO_EXPIRE_TS_ARRAY=()
+    SUBS_INFO_EXPIRE_SH_ARRAY=()
+    SUBS_INFO_MSG_ARRAY=()
 
     if [[ -f "$source" ]]; then
         cp "$source" "$SUBSCRIPTIONS_FILE"
@@ -298,21 +342,145 @@ load_subscriptions() {
         return 1
     fi
 
-    active=$(sed -n 's/.*"active"[[:space:]]*:[[:space:]]*\([0-9]\+\).*/\1/p' "$source" | head -n 1)
-    urls_raw=$(sed -n 's/.*"urls"[[:space:]]*:[[:space:]]*\[\(.*\)\].*/\1/p' "$source" | head -n 1)
+    # 优先使用 jq 严格解析，避免 items/name 等字段被误识别为 URL。
+    active=$(jq -r 'if (.active|type)=="number" then .active else 0 end' "$source" 2>/dev/null || true)
+    mapfile -t parsed_urls < <(jq -r '(.urls // []) | map(select(type=="string"))[]' "$source" 2>/dev/null || true)
+    if [[ ${#parsed_urls[@]} -eq 0 ]]; then
+        mapfile -t parsed_urls < <(jq -r '(.items // []) | map(select(type=="object" and (.url|type=="string"))) | .[].url' "$source" 2>/dev/null || true)
+    fi
 
-    if [[ -z "$urls_raw" ]]; then
+    if [[ ${#parsed_urls[@]} -eq 0 ]]; then
         return 1
     fi
 
-    mapfile -t SUBS_URLS_ARRAY < <(printf '%s' "$urls_raw" | awk -F'"' '{for (i=2; i<=NF; i+=2) print $i}')
-    if [[ ${#SUBS_URLS_ARRAY[@]} -eq 0 ]]; then
+    for url in "${parsed_urls[@]}"; do
+        url="$(printf '%s' "$url" | tr -d '\r\n')"
+        [[ -n "$url" ]] || continue
+        if [[ "$url" =~ ^https?:// ]]; then
+            cleaned_urls+=("$url")
+        fi
+    done
+
+    if [[ ${#cleaned_urls[@]} -eq 0 ]]; then
         return 1
     fi
+
+    for url in "${cleaned_urls[@]}"; do
+        normalized_url="${url%/}"
+        duplicate=0
+        for existing in "${unique_urls[@]}"; do
+            if [[ "${existing%/}" == "$normalized_url" ]]; then
+                duplicate=1
+                break
+            fi
+        done
+        if [[ "$duplicate" -eq 0 ]]; then
+            unique_urls+=("$url")
+        fi
+    done
+
+    if [[ ${#unique_urls[@]} -eq 0 ]]; then
+        return 1
+    fi
+
+    SUBS_URLS_ARRAY=("${unique_urls[@]}")
+
+    if [[ "$active" =~ ^[0-9]+$ ]]; then
+        parsed_active="$active"
+    fi
+    if [[ "$parsed_active" -lt 0 || "$parsed_active" -ge "${#SUBS_URLS_ARRAY[@]}" ]]; then
+        parsed_active=0
+    fi
+    ACTIVE_SUB_INDEX="$parsed_active"
+
+    for idx in "${!SUBS_URLS_ARRAY[@]}"; do
+        SUBS_NAMES_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].name // empty' "$source" 2>/dev/null || true)
+        SUBS_UPDATED_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].updatedAtShanghai // .items[$i].checkedAtShanghai // empty' "$source" 2>/dev/null || true)
+        SUBS_ERRORS_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].lastError // empty' "$source" 2>/dev/null || true)
+        SUBS_INFO_HAS_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.hasInfo // "false"' "$source" 2>/dev/null || echo "false")
+        SUBS_INFO_TOTAL_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.totalBytes // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_UPLOAD_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.uploadBytes // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_DOWNLOAD_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.downloadBytes // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_USED_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.usedBytes // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_REMAINING_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.remainingBytes // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_USED_PERCENT_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.usedPercent // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_EXPIRE_TS_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.expireTs // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_EXPIRE_SH_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.expireAtShanghai // "-"' "$source" 2>/dev/null || echo "-")
+        SUBS_INFO_MSG_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.message // "subscription-userinfo not found"' "$source" 2>/dev/null || echo "subscription-userinfo not found")
+        if [[ -z "${SUBS_NAMES_ARRAY[$idx]}" ]]; then
+            SUBS_NAMES_ARRAY[$idx]=$(derive_subscription_name "${SUBS_URLS_ARRAY[$idx]}" "")
+        fi
+    done
 
     SUBSCR_URLS=$(IFS=','; printf '%s' "${SUBS_URLS_ARRAY[*]}")
-    ACTIVE_SUB_INDEX="${active:-0}"
     return 0
+}
+
+write_subscriptions_state() {
+    local target="${1:-$SUBSCRIPTIONS_FILE}"
+    local tmp_file="${target}.tmp"
+    local tmp_public="${SUBSCRIPTIONS_PUBLIC}.tmp"
+    local idx
+    local total="${#SUBS_URLS_ARRAY[@]}"
+    local active="${ACTIVE_SUB_INDEX:-0}"
+
+    if [[ "$active" -lt 0 || "$active" -ge "$total" ]]; then
+        active=0
+    fi
+
+    {
+        printf '{"active":%s,"urls":[' "$active"
+        for idx in "${!SUBS_URLS_ARRAY[@]}"; do
+            [[ "$idx" -gt 0 ]] && printf ','
+            printf '"%s"' "$(escape_json "${SUBS_URLS_ARRAY[$idx]}")"
+        done
+        printf '],"items":['
+        for idx in "${!SUBS_URLS_ARRAY[@]}"; do
+            [[ "$idx" -gt 0 ]] && printf ','
+            printf '{"name":"%s","url":"%s","updatedAtShanghai":"%s","lastError":"%s","subscriptionInfo":{"hasInfo":%s,"totalBytes":%s,"uploadBytes":%s,"downloadBytes":%s,"usedBytes":%s,"remainingBytes":%s,"usedPercent":%s,"expireTs":%s,"expireAtShanghai":"%s","message":"%s"}}' \
+                "$(escape_json "${SUBS_NAMES_ARRAY[$idx]}")" \
+                "$(escape_json "${SUBS_URLS_ARRAY[$idx]}")" \
+                "$(escape_json "${SUBS_UPDATED_ARRAY[$idx]}")" \
+                "$(escape_json "${SUBS_ERRORS_ARRAY[$idx]}")" \
+                "${SUBS_INFO_HAS_ARRAY[$idx]:-false}" \
+                "${SUBS_INFO_TOTAL_ARRAY[$idx]:-0}" \
+                "${SUBS_INFO_UPLOAD_ARRAY[$idx]:-0}" \
+                "${SUBS_INFO_DOWNLOAD_ARRAY[$idx]:-0}" \
+                "${SUBS_INFO_USED_ARRAY[$idx]:-0}" \
+                "${SUBS_INFO_REMAINING_ARRAY[$idx]:-0}" \
+                "${SUBS_INFO_USED_PERCENT_ARRAY[$idx]:-0}" \
+                "${SUBS_INFO_EXPIRE_TS_ARRAY[$idx]:-0}" \
+                "$(escape_json "${SUBS_INFO_EXPIRE_SH_ARRAY[$idx]:--}")" \
+                "$(escape_json "${SUBS_INFO_MSG_ARRAY[$idx]:-subscription-userinfo not found}")"
+        done
+        printf ']}'
+    } > "$tmp_file"
+
+    mv "$tmp_file" "$target"
+    cp "$target" "$tmp_public"
+    mv "$tmp_public" "$SUBSCRIPTIONS_PUBLIC"
+    ensure_public_file_readable "$SUBSCRIPTIONS_PUBLIC"
+}
+
+subscription_cache_file_by_index() {
+    local idx="$1"
+    local url="${SUBS_URLS_ARRAY[$idx]:-}"
+    local hash
+    if [[ -z "$url" ]]; then
+        return 1
+    fi
+    hash=$(printf '%s' "$url" | md5sum | awk '{print $1}')
+    printf '%s/%s' "$SUBS_CACHE_DIR" "$hash"
+}
+
+subscriptions_signature() {
+    local raw=""
+    local url
+    raw="${ACTIVE_SUB_INDEX}|"
+    for url in "${SUBS_URLS_ARRAY[@]}"; do
+        raw="${raw}${url}||"
+    done
+    printf '%s' "$raw" | md5sum | awk '{print $1}'
 }
 
 wait_for_subscriptions() {
@@ -372,25 +540,137 @@ EOF
     ensure_public_file_readable "$SUBSCRIPTION_INFO_PUBLIC"
 }
 
+cache_subscription_info_unknown_for_index() {
+    local idx="$1"
+    local message="${2:-subscription-userinfo not found}"
+    SUBS_INFO_HAS_ARRAY[$idx]="false"
+    SUBS_INFO_TOTAL_ARRAY[$idx]=0
+    SUBS_INFO_UPLOAD_ARRAY[$idx]=0
+    SUBS_INFO_DOWNLOAD_ARRAY[$idx]=0
+    SUBS_INFO_USED_ARRAY[$idx]=0
+    SUBS_INFO_REMAINING_ARRAY[$idx]=0
+    SUBS_INFO_USED_PERCENT_ARRAY[$idx]=0
+    SUBS_INFO_EXPIRE_TS_ARRAY[$idx]=0
+    SUBS_INFO_EXPIRE_SH_ARRAY[$idx]="-"
+    SUBS_INFO_MSG_ARRAY[$idx]="$message"
+}
+
 write_subscription_info_unknown() {
     local message="${1:-subscription-userinfo not found}"
     write_subscription_info_json "false" 0 0 0 0 0 0 0 "-" "$message"
 }
 
-update_subscription_info_from_header() {
+write_subscription_info_from_cache_index() {
+    local idx="$1"
+    if [[ -z "$idx" || "$idx" -lt 0 || "$idx" -ge "${#SUBS_URLS_ARRAY[@]}" ]]; then
+        return 1
+    fi
+    write_subscription_info_json \
+        "${SUBS_INFO_HAS_ARRAY[$idx]:-false}" \
+        "${SUBS_INFO_TOTAL_ARRAY[$idx]:-0}" \
+        "${SUBS_INFO_UPLOAD_ARRAY[$idx]:-0}" \
+        "${SUBS_INFO_DOWNLOAD_ARRAY[$idx]:-0}" \
+        "${SUBS_INFO_USED_ARRAY[$idx]:-0}" \
+        "${SUBS_INFO_REMAINING_ARRAY[$idx]:-0}" \
+        "${SUBS_INFO_USED_PERCENT_ARRAY[$idx]:-0}" \
+        "${SUBS_INFO_EXPIRE_TS_ARRAY[$idx]:-0}" \
+        "${SUBS_INFO_EXPIRE_SH_ARRAY[$idx]:--}" \
+        "${SUBS_INFO_MSG_ARRAY[$idx]:-subscription-userinfo not found}"
+}
+
+write_subscription_validate_result() {
+    local ok="$1"
+    local url="$2"
+    local name="$3"
+    local message="$4"
+    local request_id="$5"
+    local info_json="${6:-}"
+    local updated_at="${7:-}"
+    local now
+    local tmp_file
+    local tmp_public
+
+    now=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
+    if [[ -z "$updated_at" ]]; then
+        updated_at="$now"
+    fi
+    if [[ -z "$info_json" ]]; then
+        info_json="null"
+    fi
+    tmp_file="${PORTAL_SUB_VALIDATE_RESULT_FILE}.tmp"
+    tmp_public="${PORTAL_SUB_VALIDATE_RESULT_PUBLIC}.tmp"
+
+    cat > "$tmp_file" <<EOF
+{"ok":$ok,"url":"$(escape_json "$url")","name":"$(escape_json "$name")","message":"$(escape_json "$message")","requestId":"$(escape_json "$request_id")","checkedAtShanghai":"$now","updatedAtShanghai":"$(escape_json "$updated_at")","subscriptionInfo":$info_json}
+EOF
+    mv "$tmp_file" "$PORTAL_SUB_VALIDATE_RESULT_FILE"
+    cp "$PORTAL_SUB_VALIDATE_RESULT_FILE" "$tmp_public"
+    mv "$tmp_public" "$PORTAL_SUB_VALIDATE_RESULT_PUBLIC"
+    ensure_public_file_readable "$PORTAL_SUB_VALIDATE_RESULT_PUBLIC"
+}
+
+derive_subscription_name() {
+    local url="$1"
+    local header_file="$2"
+    local name=""
+    local content_disposition=""
+
+    if [[ -f "$header_file" ]]; then
+        content_disposition=$(tr -d '\r' < "$header_file" | awk -F': ' 'tolower($1)=="content-disposition"{print $2; exit}')
+        if [[ -n "$content_disposition" ]]; then
+            name=$(printf '%s' "$content_disposition" | sed -n "s/.*filename\\*=UTF-8''\\([^;]*\\).*/\\1/p" | head -n 1)
+            if [[ -z "$name" ]]; then
+                name=$(printf '%s' "$content_disposition" | sed -n 's/.*filename="\([^"]*\)".*/\1/p' | head -n 1)
+            fi
+            if [[ -z "$name" ]]; then
+                name=$(printf '%s' "$content_disposition" | sed -n 's/.*filename=\([^;]*\).*/\1/p' | head -n 1)
+            fi
+        fi
+    fi
+
+    if [[ -z "$name" ]]; then
+        name=$(printf '%s' "$url" | sed -n 's#^[a-zA-Z]\+://\([^/:?]*\).*#\1#p' | head -n 1)
+    fi
+    # 清理并解码百分号编码名称（例如 %E8%B5%94%E9%92%B1%E6%9C%BA%E5%9C%BA）
+    name=$(printf '%s' "$name" | sed 's/^ *//; s/ *$//; s/^"//; s/"$//; s/;$//')
+    name=$(decode_percent_text "$name")
+    name="${name%.yaml}"
+    name="${name%.yml}"
+    name="${name%.txt}"
+    if [[ -z "$name" ]]; then
+        name="订阅"
+    fi
+    printf '%s' "$name"
+}
+
+subscription_cache_file_for_url() {
+    local url="$1"
+    local hash
+    if [[ -z "$url" ]]; then
+        return 1
+    fi
+    hash=$(printf '%s' "$url" | md5sum | awk '{print $1}')
+    printf '%s/%s' "$SUBS_CACHE_DIR" "$hash"
+}
+
+build_subscription_info_json_from_header() {
     local header_file="$1"
-    local info_line
-    local total upload download used remaining used_percent
+    local info_line total upload download used remaining used_percent
     local expire_ts expire_shanghai
+    local message
 
     if [[ ! -f "$header_file" ]]; then
-        write_subscription_info_unknown "subscription header file missing"
+        message="subscription header file missing"
+        printf '{"hasInfo":false,"totalBytes":0,"uploadBytes":0,"downloadBytes":0,"usedBytes":0,"remainingBytes":0,"usedPercent":0,"expireTs":0,"expireAtShanghai":"-","message":"%s"}' \
+            "$(escape_json "$message")"
         return 0
     fi
 
     info_line=$(tr -d '\r' < "$header_file" | awk -F': ' 'tolower($1)=="subscription-userinfo"{print $2; exit}')
     if [[ -z "$info_line" ]]; then
-        write_subscription_info_unknown "subscription-userinfo not provided by provider"
+        message="subscription-userinfo not provided by provider"
+        printf '{"hasInfo":false,"totalBytes":0,"uploadBytes":0,"downloadBytes":0,"usedBytes":0,"remainingBytes":0,"usedPercent":0,"expireTs":0,"expireAtShanghai":"-","message":"%s"}' \
+            "$(escape_json "$message")"
         return 0
     fi
 
@@ -434,7 +714,181 @@ update_subscription_info_from_header() {
         expire_shanghai="-"
     fi
 
-    write_subscription_info_json "true" "$total" "$upload" "$download" "$used" "$remaining" "$used_percent" "$expire_ts" "$expire_shanghai" "ok"
+    printf '{"hasInfo":true,"totalBytes":%s,"uploadBytes":%s,"downloadBytes":%s,"usedBytes":%s,"remainingBytes":%s,"usedPercent":%s,"expireTs":%s,"expireAtShanghai":"%s","message":"ok"}' \
+        "$total" "$upload" "$download" "$used" "$remaining" "$used_percent" "$expire_ts" "$(escape_json "$expire_shanghai")"
+}
+
+validate_subscription_url() {
+    local url="$1"
+    local request_id="$2"
+    local body_file="$TMP_DIR/validate-sub.body"
+    local header_file="$TMP_DIR/validate-sub.headers"
+    local decoded_file="$TMP_DIR/validate-sub.decoded"
+    local name
+    local curl_code=0
+    local compact_body=""
+    local cache_file=""
+    local info_json=""
+    local now_shanghai=""
+
+    if [[ -z "$url" ]]; then
+        write_subscription_validate_result "false" "$url" "" "订阅链接为空。" "$request_id"
+        return 1
+    fi
+    if [[ ! "$url" =~ ^https?:// ]]; then
+        write_subscription_validate_result "false" "$url" "" "订阅链接必须以 http:// 或 https:// 开头。" "$request_id"
+        return 1
+    fi
+
+    rm -f "$body_file" "$header_file"
+    if [[ -n "$SUBSCR_UA" ]]; then
+        if curl -fsSL --retry 2 --retry-delay 1 --connect-timeout 8 --max-time 30 -A "$SUBSCR_UA" -D "$header_file" "$url" -o "$body_file"; then
+            :
+        else
+            curl_code=$?
+            write_subscription_validate_result "false" "$url" "" "订阅链接不可用（下载失败，curl=$curl_code）。" "$request_id"
+            return 1
+        fi
+    else
+        if curl -fsSL --retry 2 --retry-delay 1 --connect-timeout 8 --max-time 30 -D "$header_file" "$url" -o "$body_file"; then
+            :
+        else
+            curl_code=$?
+            write_subscription_validate_result "false" "$url" "" "订阅链接不可用（下载失败，curl=$curl_code）。" "$request_id"
+            return 1
+        fi
+    fi
+
+    if [[ ! -s "$body_file" ]]; then
+        write_subscription_validate_result "false" "$url" "" "订阅链接返回空内容。" "$request_id"
+        return 1
+    fi
+
+    # 订阅内容有效性校验（仅下载成功还不够）
+    # 支持：Clash YAML（proxies/proxy-providers）或常见节点链接列表（含 base64 形式）
+    if grep -aEiq '(^|[[:space:]])(proxies|proxy-providers):' "$body_file"; then
+        :
+    elif grep -aEiq '(^|[\r\n])[[:space:]]*(vmess|vless|trojan|ss|ssr|hysteria2?|tuic)://' "$body_file"; then
+        :
+    else
+        compact_body=$(tr -d '\r\n\t ' < "$body_file" 2>/dev/null || true)
+        if [[ -n "$compact_body" && ${#compact_body} -ge 32 && "$compact_body" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+            if printf '%s' "$compact_body" | base64 -d > "$decoded_file" 2>/dev/null; then
+                if grep -aEiq '(vmess|vless|trojan|ss|ssr|hysteria2?|tuic)://' "$decoded_file"; then
+                    :
+                elif grep -aEiq '(^|[[:space:]])(proxies|proxy-providers):' "$decoded_file"; then
+                    :
+                else
+                    write_subscription_validate_result "false" "$url" "" "下载成功但内容不是可识别的订阅格式。" "$request_id"
+                    return 1
+                fi
+            else
+                write_subscription_validate_result "false" "$url" "" "下载成功但内容不是可识别的订阅格式。" "$request_id"
+                return 1
+            fi
+        else
+            write_subscription_validate_result "false" "$url" "" "下载成功但内容不是可识别的订阅格式。" "$request_id"
+            return 1
+        fi
+    fi
+
+    name=$(derive_subscription_name "$url" "$header_file")
+    info_json=$(build_subscription_info_json_from_header "$header_file")
+    now_shanghai=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
+    write_subscription_validate_result "true" "$url" "$name" "订阅链接校验通过。" "$request_id" "$info_json" "$now_shanghai"
+    cache_file=$(subscription_cache_file_for_url "$url" 2>/dev/null || true)
+    if [[ -n "$cache_file" ]]; then
+        mkdir -p "$SUBS_CACHE_DIR"
+        cp "$body_file" "$cache_file" 2>/dev/null || true
+    fi
+    return 0
+}
+
+update_subscription_info_from_header() {
+    local header_file="$1"
+    local idx="${2:-}"
+    local write_global="${3:-true}"
+    local info_line
+    local total upload download used remaining used_percent
+    local expire_ts expire_shanghai
+
+    if [[ ! -f "$header_file" ]]; then
+        if [[ -n "$idx" ]]; then
+            cache_subscription_info_unknown_for_index "$idx" "subscription header file missing"
+        fi
+        if [[ "$write_global" == "true" ]]; then
+            write_subscription_info_unknown "subscription header file missing"
+        fi
+        return 0
+    fi
+
+    info_line=$(tr -d '\r' < "$header_file" | awk -F': ' 'tolower($1)=="subscription-userinfo"{print $2; exit}')
+    if [[ -z "$info_line" ]]; then
+        if [[ -n "$idx" ]]; then
+            cache_subscription_info_unknown_for_index "$idx" "subscription-userinfo not provided by provider"
+        fi
+        if [[ "$write_global" == "true" ]]; then
+            write_subscription_info_unknown "subscription-userinfo not provided by provider"
+        fi
+        return 0
+    fi
+
+    extract_num() {
+        local key="$1"
+        printf '%s' "$info_line" | grep -o "${key}=[0-9]\+" | head -n 1 | cut -d= -f2 || true
+    }
+
+    total=$(extract_num "total")
+    upload=$(extract_num "upload")
+    download=$(extract_num "download")
+    expire_ts=$(extract_num "expire")
+
+    [[ -n "$total" ]] || total=0
+    [[ -n "$upload" ]] || upload=0
+    [[ -n "$download" ]] || download=0
+    [[ -n "$expire_ts" ]] || expire_ts=0
+
+    used=$((upload + download))
+    if [[ "$total" -gt 0 && "$used" -gt "$total" ]]; then
+        used="$total"
+    fi
+    if [[ "$total" -gt "$used" ]]; then
+        remaining=$((total - used))
+    else
+        remaining=0
+    fi
+
+    if [[ "$total" -gt 0 ]]; then
+        used_percent=$(awk "BEGIN{printf \"%d\", ($used*100)/$total}")
+        if [[ "$used_percent" -gt 100 ]]; then
+            used_percent=100
+        fi
+    else
+        used_percent=0
+    fi
+
+    if [[ "$expire_ts" -gt 0 ]]; then
+        expire_shanghai=$(TZ=Asia/Shanghai date -d "@$expire_ts" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || TZ=Asia/Shanghai date -r "$expire_ts" '+%Y-%m-%d %H:%M:%S')
+    else
+        expire_shanghai="-"
+    fi
+
+    if [[ -n "$idx" ]]; then
+        SUBS_INFO_HAS_ARRAY[$idx]="true"
+        SUBS_INFO_TOTAL_ARRAY[$idx]="$total"
+        SUBS_INFO_UPLOAD_ARRAY[$idx]="$upload"
+        SUBS_INFO_DOWNLOAD_ARRAY[$idx]="$download"
+        SUBS_INFO_USED_ARRAY[$idx]="$used"
+        SUBS_INFO_REMAINING_ARRAY[$idx]="$remaining"
+        SUBS_INFO_USED_PERCENT_ARRAY[$idx]="$used_percent"
+        SUBS_INFO_EXPIRE_TS_ARRAY[$idx]="$expire_ts"
+        SUBS_INFO_EXPIRE_SH_ARRAY[$idx]="$expire_shanghai"
+        SUBS_INFO_MSG_ARRAY[$idx]="ok"
+    fi
+
+    if [[ "$write_global" == "true" ]]; then
+        write_subscription_info_json "true" "$total" "$upload" "$download" "$used" "$remaining" "$used_percent" "$expire_ts" "$expire_shanghai" "ok"
+    fi
 }
 
 write_latency_error() {
@@ -461,6 +915,36 @@ write_latency_error() {
 
     cat > "$tmp_file" <<EOF
 {"mode":"$mode","checkedAtShanghai":"$now","checkedAtEpoch":$now_epoch,"error":"$(escape_json "$message")","sites":[]}
+EOF
+    mv "$tmp_file" "$target_file"
+    cp "$target_file" "$tmp_public"
+    mv "$tmp_public" "$target_public"
+    ensure_public_file_readable "$target_public"
+}
+
+write_latency_default() {
+    local mode="$1"
+    local now_epoch
+    local now
+    local tmp_file
+    local tmp_public
+    local target_file
+    local target_public
+
+    now_epoch=$(date +%s)
+    now=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
+    if [[ "$mode" == "router" ]]; then
+        target_file="$PORTAL_LATENCY_ROUTER_FILE"
+        target_public="$PORTAL_LATENCY_ROUTER_PUBLIC"
+    else
+        target_file="$PORTAL_LATENCY_BROWSER_FILE"
+        target_public="$PORTAL_LATENCY_BROWSER_PUBLIC"
+    fi
+
+    tmp_file="${target_file}.tmp"
+    tmp_public="${target_public}.tmp"
+    cat > "$tmp_file" <<EOF
+{"mode":"$mode","checkedAtShanghai":"$now","checkedAtEpoch":$now_epoch,"error":"","sites":[{"key":"youtube","name":"YouTube","url":"https://www.youtube.com/generate_204","reachable":null,"httpCode":"-","latencyMs":-1,"error":""},{"key":"github","name":"GitHub","url":"https://github.com/","reachable":null,"httpCode":"-","latencyMs":-1,"error":""},{"key":"tmdb","name":"TMDB","url":"https://www.themoviedb.org/","reachable":null,"httpCode":"-","latencyMs":-1,"error":""},{"key":"baidu","name":"百度","url":"https://www.baidu.com/","reachable":null,"httpCode":"-","latencyMs":-1,"error":""}]}
 EOF
     mv "$tmp_file" "$target_file"
     cp "$target_file" "$tmp_public"
@@ -511,8 +995,15 @@ refresh_latency_cache() {
 watch_portal_update() {
     while true; do
         if [[ -f "$PORTAL_UPDATE_TRIGGER" ]]; then
+            local update_req_raw
+            local update_scope
+            update_req_raw=$(cat "$PORTAL_UPDATE_TRIGGER" 2>/dev/null || true)
             rm -f "$PORTAL_UPDATE_TRIGGER"
-            update_resources "update"
+            update_scope=$(printf '%s' "$update_req_raw" | jq -r '.scope // empty' 2>/dev/null || true)
+            if [[ "$update_scope" != "all" ]]; then
+                update_scope="active"
+            fi
+            update_resources "update" "$update_scope"
         fi
         if [[ -f "$PORTAL_LATENCY_BROWSER_TRIGGER" ]]; then
             rm -f "$PORTAL_LATENCY_BROWSER_TRIGGER"
@@ -521,6 +1012,19 @@ watch_portal_update() {
         if [[ -f "$PORTAL_LATENCY_ROUTER_TRIGGER" ]]; then
             rm -f "$PORTAL_LATENCY_ROUTER_TRIGGER"
             refresh_latency_cache "router" "true"
+        fi
+        if [[ -f "$PORTAL_SUB_VALIDATE_TRIGGER" ]]; then
+            local req_raw
+            local req_id
+            local req_url
+            req_raw=$(cat "$PORTAL_SUB_VALIDATE_TRIGGER" 2>/dev/null || true)
+            rm -f "$PORTAL_SUB_VALIDATE_TRIGGER"
+            req_id=$(printf '%s' "$req_raw" | jq -r '.requestId // empty' 2>/dev/null || true)
+            req_url=$(printf '%s' "$req_raw" | jq -r '.url // empty' 2>/dev/null || true)
+            if [[ -z "$req_url" ]]; then
+                req_url=$(printf '%s' "$req_raw" | tr -d '\r\n')
+            fi
+            validate_subscription_url "$req_url" "$req_id" || true
         fi
         sleep 2
     done
@@ -565,7 +1069,7 @@ read_settings() {
 }
 
 build_config_from_builtin() {
-    local sub_url="$1"
+    local sub_file="$1"
     local target_file="$2"
     local tmp_file="${target_file}.builtin.tmp"
 
@@ -574,8 +1078,8 @@ build_config_from_builtin() {
         return 1
     fi
 
-    if ! awk -v url="$sub_url" '
-BEGIN { in_pp=0; in_airport=0; replaced=0 }
+    if ! awk -v url="$sub_file" '
+BEGIN { in_pp=0; in_airport=0; replaced_path=0; replaced_type=0 }
 {
     if ($0 ~ /^proxy-providers:[[:space:]]*$/) {
         in_pp=1
@@ -594,15 +1098,25 @@ BEGIN { in_pp=0; in_airport=0; replaced=0 }
     if (in_airport && $0 ~ /^  [A-Za-z0-9_-]+:[[:space:]]*$/) {
         in_airport=0
     }
-    if (in_airport && replaced == 0 && $0 ~ /^    url:[[:space:]]*"/) {
-        print "    url: \"" url "\""
-        replaced=1
+    if (in_airport && $0 ~ /^    url:[[:space:]]*"/) {
+        print "    path: \"" url "\""
+        replaced_path=1
+        next
+    }
+    if (in_airport && $0 ~ /^    path:[[:space:]]*"/) {
+        print "    path: \"" url "\""
+        replaced_path=1
+        next
+    }
+    if (in_airport && $0 ~ /^    type:[[:space:]]*/) {
+        print "    type: file"
+        replaced_type=1
         next
     }
     print
 }
 END {
-    if (replaced == 0) {
+    if (replaced_path == 0 || replaced_type == 0) {
         exit 2
     }
 }
@@ -626,6 +1140,8 @@ auto_update_loop() {
     local prev_builtin_enabled="true"
     local mtime
     local subs_mtime
+    local last_subs_signature=""
+    local current_subs_signature=""
 
     # 初始化基线，避免容器启动后首次轮询被误判为“文件变更”
     if [[ -f "$SETTINGS_PUBLIC" ]]; then
@@ -639,7 +1155,9 @@ auto_update_loop() {
         subs_mtime=$(stat -c %Y "$SUBSCRIPTIONS_PUBLIC" 2>/dev/null || stat -f %m "$SUBSCRIPTIONS_PUBLIC")
         last_subs_mtime="$subs_mtime"
         cp "$SUBSCRIPTIONS_PUBLIC" "$SUBSCRIPTIONS_FILE"
-        load_subscriptions >/dev/null 2>&1 || true
+        if load_subscriptions >/dev/null 2>&1; then
+            last_subs_signature=$(subscriptions_signature)
+        fi
     fi
 
     while true; do
@@ -654,7 +1172,7 @@ auto_update_loop() {
                 next_run=0
                 if [[ "$builtin_enabled" != "$prev_builtin_enabled" ]]; then
                     log "Built-in rule switch changed ($prev_builtin_enabled -> $builtin_enabled), applying immediately..."
-                    if update_resources "update"; then
+                    if update_resources "switch" "switch"; then
                         log "Built-in rule switch applied successfully."
                     else
                         log "WARNING: Failed to apply built-in rule switch immediately."
@@ -670,8 +1188,19 @@ auto_update_loop() {
                 cp "$SUBSCRIPTIONS_PUBLIC" "$SUBSCRIPTIONS_FILE"
                 if load_subscriptions; then
                     log "Subscriptions updated: active=${ACTIVE_SUB_INDEX:-0} total=${#SUBS_URLS_ARRAY[@]}"
-                    update_resources "update"
-                    next_run=0
+                    current_subs_signature=$(subscriptions_signature)
+                    if [[ "$current_subs_signature" != "$last_subs_signature" ]]; then
+                        if update_resources "switch" "switch"; then
+                            next_run=0
+                            if load_subscriptions >/dev/null 2>&1; then
+                                last_subs_signature=$(subscriptions_signature)
+                            else
+                                last_subs_signature="$current_subs_signature"
+                            fi
+                        else
+                            log "WARNING: Failed to apply subscription switch."
+                        fi
+                    fi
                 else
                     log "Subscriptions file updated but empty."
                 fi
@@ -689,7 +1218,7 @@ auto_update_loop() {
                     next_run=$((now + interval_sec))
                 fi
                 if [[ "$now" -ge "$next_run" ]]; then
-                    update_resources "update"
+                    update_resources "update" "all"
                     next_run=$((now + interval_sec))
                 fi
             fi
@@ -728,6 +1257,18 @@ start_portal() {
         ensure_public_file_readable "$SUBSCRIPTION_INFO_PUBLIC"
     else
         write_subscription_info_unknown "waiting for subscription update"
+    fi
+    if [[ -f "$PORTAL_LATENCY_BROWSER_FILE" ]]; then
+        cp "$PORTAL_LATENCY_BROWSER_FILE" "$PORTAL_LATENCY_BROWSER_PUBLIC"
+        ensure_public_file_readable "$PORTAL_LATENCY_BROWSER_PUBLIC"
+    else
+        write_latency_default "browser"
+    fi
+    if [[ -f "$PORTAL_LATENCY_ROUTER_FILE" ]]; then
+        cp "$PORTAL_LATENCY_ROUTER_FILE" "$PORTAL_LATENCY_ROUTER_PUBLIC"
+        ensure_public_file_readable "$PORTAL_LATENCY_ROUTER_PUBLIC"
+    else
+        write_latency_default "router"
     fi
     if [[ -f "$PORTAL_CONF" ]]; then
         sed -i "s/__PORTAL_PORT__/$PORTAL_PORT/g" "$PORTAL_CONF"
@@ -802,6 +1343,59 @@ validate_generated_config() {
     done
 }
 
+restart_clash_via_api() {
+    local HTTP_CODE
+    local API_URL="http://127.0.0.1:${DASH_PORT}/restart"
+    local AUTH_HEADER="Authorization: Bearer ${CLASH_SECRET}"
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL" \
+        -H "Content-Type: application/json" \
+        -H "$AUTH_HEADER" \
+        -d '{"path":"","payload":""}')
+    if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "204" ]]; then
+        log "Clash restart trigger success (HTTP $HTTP_CODE)."
+    else
+        log "ERROR: Clash restart trigger failed (HTTP $HTTP_CODE)."
+    fi
+}
+
+apply_active_subscription_from_cache() {
+    local mode="$1"
+    local builtin_enabled="$2"
+    local active_index="${ACTIVE_SUB_INDEX:-0}"
+    local cache_file
+
+    if [[ "$active_index" -lt 0 || "$active_index" -ge "${#SUBS_URLS_ARRAY[@]}" ]]; then
+        active_index=0
+    fi
+
+    cache_file=$(subscription_cache_file_by_index "$active_index") || return 1
+    if [[ ! -s "$cache_file" ]]; then
+        log "WARNING: Active subscription cache missing: $cache_file"
+        return 1
+    fi
+
+    if [[ "$builtin_enabled" == "true" ]]; then
+        if ! build_config_from_builtin "$cache_file" "$CONFIG_FILE"; then
+            return 1
+        fi
+    else
+        cp "$cache_file" "$CONFIG_FILE"
+    fi
+
+    apply_config_fixes "$CONFIG_FILE"
+    if ! validate_generated_config; then
+        return 1
+    fi
+    write_portal_status
+    CURRENT_ACTIVE_INDEX="$active_index"
+    log "Configuration switched from local cache successfully."
+
+    if [[ "$mode" == "update" || "$mode" == "switch" ]]; then
+        restart_clash_via_api
+    fi
+    return 0
+}
+
 update_geodata_resources() {
     local mmdb_max_age=86400
     local prefetch_failed=0
@@ -850,18 +1444,31 @@ update_geodata_resources() {
 }
 
 # ========= 函数：执行更新任务 =========
-# 参数 $1: "initial" (初始化) 或 "update" (定时更新)
+# 参数 $1: MODE -> initial | update | switch
+# 参数 $2: DOWNLOAD_SCOPE -> active | all | switch
 update_resources() {
-    local MODE=$1
-    local UPDATE_SUCCESS=true
+    local MODE="${1:-update}"
+    local DOWNLOAD_SCOPE="${2:-active}"
     local lock_fd=200
     local builtin_enabled="true"
+    local active_index=0
+    local idx
+    local now_shanghai
+    local -a targets=()
+    local curl_code=0
+    local cache_file=""
+    local header_file=""
+    local active_download_ok="false"
+    local subs_state_dirty="false"
+    local active_error=""
+    local switch_missing_cache="false"
+    local rollback_index=""
 
     exec {lock_fd}>/tmp/clash_update.lock
     flock "$lock_fd"
     trap 'flock -u "$lock_fd"; exec {lock_fd}>&-' RETURN
 
-    log "Starting resource update ($MODE)..."
+    log "Starting resource update (mode=$MODE, scope=$DOWNLOAD_SCOPE)..."
 
     if ! load_subscriptions; then
         log "No subscriptions configured. Skipping update."
@@ -869,7 +1476,6 @@ update_resources() {
     fi
     IFS='|' read -r _ _ builtin_enabled <<< "$(read_settings)"
 
-    # 1. 备份旧文件 (仅在非首次运行时，或者文件存在时)
     if [[ -f "$CONFIG_FILE" ]]; then
         cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
     fi
@@ -877,125 +1483,125 @@ update_resources() {
         cp "$MMDB_FILE" "$MMDB_FILE.bak"
     fi
 
-    # 2. 下载订阅
-    IFS=',' read -ra URLS <<< "$SUBSCR_URLS"
-    local SUB_DOWNLOAD_OK=false
-    local active_index="${ACTIVE_SUB_INDEX:-0}"
-    local active_header_file="$TMP_DIR/sub${active_index}.headers"
-    if [[ "$active_index" -lt 0 || "$active_index" -ge "${#URLS[@]}" ]]; then
+    active_index="${ACTIVE_SUB_INDEX:-0}"
+    if [[ "$active_index" -lt 0 || "$active_index" -ge "${#SUBS_URLS_ARRAY[@]}" ]]; then
         active_index=0
-        active_header_file="$TMP_DIR/sub${active_index}.headers"
     fi
-    
-    # 尝试下载所有订阅，但主要关注第一个订阅(sub0)用于生成config
-    for i in "${!URLS[@]}"; do
-        log "Downloading subscription $i..."
-        if [[ -n "$SUBSCR_UA" ]]; then
-            if [[ $i -eq $active_index ]]; then
-                rm -f "$active_header_file"
-                if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 60 -A "$SUBSCR_UA" -D "$active_header_file" "${URLS[$i]}" -o "$TMP_DIR/sub$i.yaml"; then
-                    SUB_DOWNLOAD_OK=true
-                    continue
+
+    # 切换模式下默认不下载；若目标订阅本地缓存不存在，则尝试下载一次以生成缓存。
+    if [[ "$MODE" == "switch" && "$DOWNLOAD_SCOPE" == "switch" ]]; then
+        cache_file=$(subscription_cache_file_by_index "$active_index" 2>/dev/null || true)
+        if [[ ! -s "$cache_file" ]]; then
+            switch_missing_cache="true"
+            if [[ "$CURRENT_ACTIVE_INDEX" -ge 0 && "$CURRENT_ACTIVE_INDEX" -lt "${#SUBS_URLS_ARRAY[@]}" ]]; then
+                local rollback_cache
+                rollback_cache=$(subscription_cache_file_by_index "$CURRENT_ACTIVE_INDEX" 2>/dev/null || true)
+                if [[ -s "$rollback_cache" ]]; then
+                    rollback_index="$CURRENT_ACTIVE_INDEX"
                 fi
-            elif curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 60 -A "$SUBSCR_UA" "${URLS[$i]}" -o "$TMP_DIR/sub$i.yaml"; then
-                continue
+            fi
+            log "WARNING: Active subscription cache missing: $cache_file"
+            log "Attempting to download active subscription once to build local cache."
+            DOWNLOAD_SCOPE="active"
+        fi
+    fi
+
+    if [[ "$DOWNLOAD_SCOPE" == "all" ]]; then
+        for idx in "${!SUBS_URLS_ARRAY[@]}"; do
+            targets+=("$idx")
+        done
+    elif [[ "$DOWNLOAD_SCOPE" == "active" ]]; then
+        targets+=("$active_index")
+    fi
+
+    for idx in "${targets[@]}"; do
+        curl_code=0
+        cache_file=$(subscription_cache_file_by_index "$idx") || continue
+        header_file="$TMP_DIR/sub${idx}.headers"
+        rm -f "$header_file" "${cache_file}.tmp"
+        log "Downloading subscription $idx..."
+
+        if [[ -n "$SUBSCR_UA" ]]; then
+            if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 60 -A "$SUBSCR_UA" -D "$header_file" "${SUBS_URLS_ARRAY[$idx]}" -o "${cache_file}.tmp"; then
+                :
+            else
+                curl_code=$?
             fi
         else
-            if [[ $i -eq $active_index ]]; then
-                rm -f "$active_header_file"
-                if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 60 -D "$active_header_file" "${URLS[$i]}" -o "$TMP_DIR/sub$i.yaml"; then
-                    SUB_DOWNLOAD_OK=true
-                    continue
-                fi
-            elif curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 60 "${URLS[$i]}" -o "$TMP_DIR/sub$i.yaml"; then
-                continue
+            if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 60 -D "$header_file" "${SUBS_URLS_ARRAY[$idx]}" -o "${cache_file}.tmp"; then
+                :
+            else
+                curl_code=$?
             fi
         fi
-        log "WARNING: Failed to download subscription $i"
-        if [[ $i -eq $active_index ]]; then UPDATE_SUCCESS=false; fi
+
+        if [[ -s "${cache_file}.tmp" ]]; then
+            mv "${cache_file}.tmp" "$cache_file"
+            now_shanghai=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
+            SUBS_UPDATED_ARRAY[$idx]="$now_shanghai"
+            SUBS_ERRORS_ARRAY[$idx]=""
+            SUBS_NAMES_ARRAY[$idx]=$(derive_subscription_name "${SUBS_URLS_ARRAY[$idx]}" "$header_file")
+            update_subscription_info_from_header "$header_file" "$idx" "false"
+            subs_state_dirty="true"
+            if [[ "$idx" -eq "$active_index" ]]; then
+                active_download_ok="true"
+            fi
+        else
+            rm -f "${cache_file}.tmp"
+            SUBS_ERRORS_ARRAY[$idx]="下载失败（curl=${curl_code:-1}）"
+            cache_subscription_info_unknown_for_index "$idx" "subscription download failed (curl=${curl_code:-1})"
+            log "WARNING: Failed to download subscription $idx (curl=${curl_code:-1})"
+            subs_state_dirty="true"
+            if [[ "$idx" -eq "$active_index" ]]; then
+                active_error="当前订阅下载失败（索引 ${active_index}，curl=${curl_code:-1}）。"
+            fi
+        fi
     done
 
-    if [[ "$SUB_DOWNLOAD_OK" == "true" ]]; then
-        update_subscription_info_from_header "$active_header_file"
+    if [[ "$DOWNLOAD_SCOPE" != "switch" && "$subs_state_dirty" == "true" ]]; then
+        write_subscriptions_state "$SUBSCRIPTIONS_FILE"
     fi
 
-    # 3. 验证与回滚逻辑
-    if [[ "$UPDATE_SUCCESS" == "true" ]]; then
-        # === 成功分支 ===
-        cp "$TMP_DIR/sub${active_index}.yaml" "$DEBUG_RAW_CONFIG"
-        if [[ "$builtin_enabled" == "true" ]]; then
-            log "Built-in rule enabled. Generating config from template..."
-            if ! build_config_from_builtin "${URLS[$active_index]}" "$CONFIG_FILE"; then
-                UPDATE_SUCCESS=false
-            fi
-        else
-            cp "$TMP_DIR/sub${active_index}.yaml" "$CONFIG_FILE"
-        fi
-        if [[ "$UPDATE_SUCCESS" == "true" ]]; then
-            apply_config_fixes "$CONFIG_FILE"
-        fi
-        if [[ "$UPDATE_SUCCESS" == "true" ]]; then
-            if ! validate_generated_config; then
-                UPDATE_SUCCESS=false
-            fi
-        fi
-        if [[ "$UPDATE_SUCCESS" != "true" ]]; then
-            log "CRITICAL: Config validation failed."
-            if [[ -f "$CONFIG_FILE.bak" ]]; then
-                mv "$CONFIG_FILE.bak" "$CONFIG_FILE"
-            fi
-            if [[ "$MODE" == "initial" ]]; then
-                log "Initial startup failed due to invalid config. Exiting."
-                exit 1
-            fi
-            return 1
-        fi
-        write_portal_status
-        log "Configuration generated successfully."
-        
-        # 如果是定时更新模式，通知 API 重载
-        if [[ "$MODE" == "update" ]]; then
-            log "Notifying Clash to restart via API..."
-            # 构造 API URL 和 Authorization
-            local API_URL="http://127.0.0.1:${DASH_PORT}/restart"
-            local AUTH_HEADER="Authorization: Bearer ${CLASH_SECRET}"
-            
-            # 发送 POST 请求
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL" \
-                -H "Content-Type: application/json" \
-                -H "$AUTH_HEADER" \
-                -d '{"path":"","payload":""}')
-            
-            if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "204" ]]; then
-                log "Clash restart trigger success (HTTP $HTTP_CODE)."
-            else
-                log "ERROR: Clash restart trigger failed (HTTP $HTTP_CODE)."
-            fi
-        fi
-
-    else
-        # === 失败分支 ===
-        log "CRITICAL: Update failed."
-        if [[ -f "$CONFIG_FILE.bak" || -f "$MMDB_FILE.bak" ]]; then
-            log "Restoring from backups..."
-            if [[ -f "$CONFIG_FILE.bak" ]]; then
-                mv "$CONFIG_FILE.bak" "$CONFIG_FILE"
-            fi
-            if [[ -f "$MMDB_FILE.bak" ]]; then
-                mv "$MMDB_FILE.bak" "$MMDB_FILE"
-            fi
-        else
-            if [[ "$MODE" == "initial" ]]; then
-                log "Initial startup failed and no backup available. Exiting."
-                exit 1
-            else
-                log "No backup available or restore failed. Keeping current state."
-            fi
+    if [[ "$switch_missing_cache" == "true" && "$active_download_ok" != "true" ]]; then
+        if [[ -n "$rollback_index" ]]; then
+            ACTIVE_SUB_INDEX="$rollback_index"
+            active_index="$rollback_index"
+            active_error=""
+            write_subscriptions_state "$SUBSCRIPTIONS_FILE"
+            write_subscription_info_from_cache_index "$active_index" || true
+            log "Switch aborted: cache missing for target subscription, reverted active to $active_index."
         fi
     fi
-    
-    # 清理临时文件
-    rm -f "$CONFIG_FILE.bak" "$MMDB_FILE.bak" "$MMDB_FILE.tmp" "$active_header_file"
+
+    if [[ "$DOWNLOAD_SCOPE" != "switch" && "$active_download_ok" != "true" && -n "$active_error" ]]; then
+        cache_subscription_info_unknown_for_index "$active_index" "$active_error"
+    fi
+    write_subscription_info_from_cache_index "$active_index" || write_subscription_info_unknown "$active_error"
+
+    if apply_active_subscription_from_cache "$MODE" "$builtin_enabled"; then
+        cache_file=$(subscription_cache_file_by_index "$active_index" 2>/dev/null || true)
+        if [[ -n "$cache_file" && -f "$cache_file" ]]; then
+            cp "$cache_file" "$DEBUG_RAW_CONFIG" 2>/dev/null || true
+        fi
+        rm -f "$CONFIG_FILE.bak" "$MMDB_FILE.bak" "$MMDB_FILE.tmp"
+        return 0
+    fi
+
+    log "CRITICAL: Update/switch failed."
+    if [[ -f "$CONFIG_FILE.bak" || -f "$MMDB_FILE.bak" ]]; then
+        log "Restoring from backups..."
+        if [[ -f "$CONFIG_FILE.bak" ]]; then
+            mv "$CONFIG_FILE.bak" "$CONFIG_FILE"
+        fi
+        if [[ -f "$MMDB_FILE.bak" ]]; then
+            mv "$MMDB_FILE.bak" "$MMDB_FILE"
+        fi
+    fi
+    if [[ "$MODE" == "initial" ]]; then
+        log "Initial startup failed due to missing/invalid local subscription cache. Exiting."
+        exit 1
+    fi
+    return 1
 }
 
 # ========= 主逻辑 =========

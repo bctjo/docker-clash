@@ -162,6 +162,7 @@
       }
       .field textarea,
       .field select,
+      .field input[type="text"],
       .field input[type="password"],
       .auto-field input {
         width: 100%;
@@ -590,14 +591,18 @@
               <h2 className="mb-3 text-base font-semibold">订阅管理</h2>
               <div className="grid gap-3">
                 <label className="field">
-                  订阅链接（每行一个）
-                  <textarea id="subs-text" placeholder="https://example.com/sub1&#10;https://example.com/sub2"></textarea>
+                  订阅链接
+                  <div className="flex gap-2">
+                    <input id="subs-input" type="text" placeholder="https://example.com/sub.yaml" />
+                    <button id="add-sub" type="button" className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-white"
+                      style=${{ borderColor: 'var(--accent-strong)', background: 'var(--accent-strong)', whiteSpace: 'nowrap' }}>导入</button>
+                  </div>
                 </label>
-                <label className="field">
-                  当前使用的订阅
-                  <select id="subs-active"></select>
-                </label>
-                <div className="help" id="subs-help">保存后会自动更新并应用当前订阅。</div>
+                <div className="field">
+                  已保存订阅
+                  <div id="subs-list" className="grid gap-2"></div>
+                </div>
+                <div className="help" id="subs-help">仅在订阅链接有效时允许导入。保存后默认直接切换本地缓存；手动更新仅更新当前订阅，自动更新会更新全部订阅。</div>
                 <div className="error" id="subs-error" style=${{ display: 'none' }}></div>
               </div>
               <div className="modal-actions">
@@ -952,6 +957,9 @@
 
       let lastUpdateAtMs = null;
       let lastUpdateFallback = '-';
+      let lastUpdateLocked = false;
+      let lastSubscriptionsSnapshot = { entries: [], active: 0, loaded: false };
+      let subscriptionInfoLockedUntil = 0;
 
       const parseDateTime = (value) => {
         if (!value) return null;
@@ -987,6 +995,15 @@
       };
 
       const fetchStatus = async () => {
+        if (lastUpdateLocked) return;
+        if (lastSubscriptionsSnapshot.loaded && lastSubscriptionsSnapshot.entries.length) {
+          applyLastUpdateFromSubscriptions(
+            lastSubscriptionsSnapshot.entries,
+            lastSubscriptionsSnapshot.active,
+            true
+          );
+          if (lastUpdateLocked) return;
+        }
         try {
           const res = await fetch(`/status.json?t=${Date.now()}`, { cache: 'no-store' });
           if (!res.ok) throw new Error('status');
@@ -1012,6 +1029,27 @@
         }
       };
 
+      const applyLastUpdateFromSubscriptions = (entries, activeIndex, lockOnMissing = false) => {
+        if (!entries || !entries.length) return;
+        const entry = entries[Math.min(Math.max(activeIndex, 0), entries.length - 1)];
+        if (!entry) return;
+        if (!entry.updatedAtShanghai) {
+          if (lockOnMissing) {
+            lastUpdateAtMs = null;
+            lastUpdateFallback = '-';
+            lastUpdateLocked = true;
+            renderLastUpdate();
+          }
+          return;
+        }
+        const parsed = parseDateTime(entry.updatedAtShanghai);
+        if (!parsed) return;
+        lastUpdateAtMs = parsed;
+        lastUpdateFallback = '-';
+        lastUpdateLocked = true;
+        renderLastUpdate();
+      };
+
       const formatBytes = (bytes) => {
         const n = Number(bytes);
         if (!Number.isFinite(n) || n < 0) return '--';
@@ -1033,6 +1071,34 @@
         subExpireEl.textContent = '到期 --';
       };
 
+      const renderSubscriptionInfo = (info) => {
+        if (!info || !info.hasInfo) {
+          renderSubscriptionInfoUnknown(info && info.message ? info.message : '订阅未返回流量信息');
+          return false;
+        }
+        const total = Number(info.totalBytes || 0);
+        let remaining = Number(info.remainingBytes);
+        if (!Number.isFinite(remaining)) {
+          const used = Number(info.usedBytes || 0);
+          remaining = total > 0 ? Math.max(0, total - used) : 0;
+        }
+        const remainingPercent = total > 0 ? Math.max(0, Math.min(100, Math.round((remaining * 100) / total))) : 0;
+        subUsageFillEl.style.width = `${remainingPercent}%`;
+        subUsageFillEl.style.background = remainingPercent <= 10
+          ? 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)'
+          : 'linear-gradient(90deg, #22c55e 0%, #16a34a 100%)';
+        subUsagePercentEl.textContent = `${remainingPercent}%`;
+        subUsageNumbersEl.textContent = `剩余 ${formatBytes(remaining)} / 总量 ${formatBytes(total)}`;
+        subExpireEl.textContent = `到期 ${formatExpireDate(info.expireAtShanghai)}`;
+        return true;
+      };
+
+      const lockSubscriptionInfo = (ms = 6000) => {
+        subscriptionInfoLockedUntil = Math.max(subscriptionInfoLockedUntil, Date.now() + ms);
+      };
+
+      const isSubscriptionInfoLocked = () => Date.now() < subscriptionInfoLockedUntil;
+
       const formatExpireDate = (value) => {
         if (!value) return '--';
         const raw = String(value).trim();
@@ -1045,30 +1111,31 @@
         return raw;
       };
 
-      const fetchSubscriptionInfo = async () => {
+      const fetchSubscriptionInfo = async (force = false) => {
+        if (!force && isSubscriptionInfoLocked()) {
+          return false;
+        }
         try {
           const res = await fetch(`/subscription-info.json?t=${Date.now()}`, { cache: 'no-store' });
           if (!res.ok) throw new Error('subscription-info');
           const data = await res.json();
-          if (!data.hasInfo) {
-            renderSubscriptionInfoUnknown(data.message || '订阅未返回流量信息');
-            return false;
-          }
-          const remaining = Number(data.remainingBytes || 0);
-          const total = Number(data.totalBytes || 0);
-          const remainingPercent = total > 0 ? Math.max(0, Math.min(100, Math.round((remaining * 100) / total))) : 0;
-          subUsageFillEl.style.width = `${remainingPercent}%`;
-          subUsageFillEl.style.background = remainingPercent <= 10
-            ? 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)'
-            : 'linear-gradient(90deg, #22c55e 0%, #16a34a 100%)';
-          subUsagePercentEl.textContent = `${remainingPercent}%`;
-          subUsageNumbersEl.textContent = `剩余 ${formatBytes(remaining)} / 总量 ${formatBytes(total)}`;
-          subExpireEl.textContent = `到期 ${formatExpireDate(data.expireAtShanghai)}`;
-          return true;
+          return renderSubscriptionInfo(data);
         } catch (err) {
           renderSubscriptionInfoUnknown('读取订阅流量信息失败');
           return false;
         }
+      };
+
+      const applySubscriptionInfoFromEntries = (entries, activeIndex, lockOnMissing = false) => {
+        if (!entries || !entries.length) return false;
+        const entry = entries[Math.min(Math.max(activeIndex, 0), entries.length - 1)];
+        if (!entry || !entry.subscriptionInfo) {
+          if (lockOnMissing) {
+            renderSubscriptionInfoUnknown('暂无订阅流量信息');
+          }
+          return false;
+        }
+        return renderSubscriptionInfo(entry.subscriptionInfo);
       };
 
       const fetchCoreVersion = async () => {
@@ -1132,7 +1199,11 @@
         updateBtn.title = '更新中...';
         if (updateBtnIcon) updateBtnIcon.classList.add('animate-spin');
         try {
-          const res = await fetchWithAuth('/update', { method: 'PUT', body: '1' });
+          const res = await fetchWithAuth('/update', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scope: 'active' })
+          });
           if (!res.ok) throw new Error('update');
         } catch (err) {
           updateBtn.disabled = false;
@@ -1204,10 +1275,14 @@
       const closeSubs = document.getElementById('close-subs');
       const saveSubs = document.getElementById('save-subs');
       const subsBackdrop = document.getElementById('subs-backdrop');
-      const subsText = document.getElementById('subs-text');
-      const subsActive = document.getElementById('subs-active');
+      const subsInput = document.getElementById('subs-input');
+      const addSubBtn = document.getElementById('add-sub');
+      const subsList = document.getElementById('subs-list');
       const subsError = document.getElementById('subs-error');
       let subsRequired = false;
+      let subsEntries = [];
+      let subsActiveIndex = 0;
+      let subsEditingIndex = -1;
 
       const openSubsModal = (required = false) => {
         subsRequired = required;
@@ -1221,26 +1296,204 @@
         subsModal.setAttribute('aria-hidden', 'true');
       };
 
-      const normalizeUrls = (text) => text
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
-
-      const setActiveOptions = (urls, activeIndex) => {
-        subsActive.innerHTML = '';
-        urls.forEach((url, idx) => {
-          const opt = document.createElement('option');
-          opt.value = String(idx);
-          opt.textContent = `${idx + 1}. ${url}`;
-          subsActive.appendChild(opt);
-        });
-        if (urls.length === 0) {
-          const opt = document.createElement('option');
-          opt.value = '0';
-          opt.textContent = '暂无订阅';
-          subsActive.appendChild(opt);
+      const inferNameFromUrl = (url) => {
+        try {
+          const u = new URL(url);
+          return u.hostname || '订阅';
+        } catch (err) {
+          return '订阅';
         }
-        subsActive.value = urls.length ? String(Math.min(activeIndex, urls.length - 1)) : '0';
+      };
+
+      const decodeMaybePercentName = (rawName) => {
+        const name = String(rawName || '').trim();
+        if (!name) return '';
+        if (!/%[0-9A-Fa-f]{2}/.test(name)) return name;
+        try {
+          const decoded = decodeURIComponent(name);
+          return decoded || name;
+        } catch (err) {
+          return name;
+        }
+      };
+
+      const normalizeUrlForCompare = (raw) => {
+        try {
+          const u = new URL(String(raw || '').trim());
+          const normalized = `${u.origin}${u.pathname}${u.search}${u.hash}`;
+          return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+        } catch (err) {
+          const fallback = String(raw || '').trim();
+          return fallback.endsWith('/') ? fallback.slice(0, -1) : fallback;
+        }
+      };
+
+      const normalizeSubscriptionData = (data) => {
+        const urls = Array.isArray(data.urls) ? data.urls.filter((u) => typeof u === 'string' && u.trim()) : [];
+        const items = Array.isArray(data.items) ? data.items : [];
+        const entries = items
+          .map((item) => ({
+            name: (typeof item.name === 'string' && item.name.trim()) ? decodeMaybePercentName(item.name.trim()) : '',
+            url: typeof item.url === 'string' ? item.url.trim() : '',
+            updatedAtShanghai: (typeof item.updatedAtShanghai === 'string' && item.updatedAtShanghai)
+              ? item.updatedAtShanghai
+              : (typeof item.checkedAtShanghai === 'string' ? item.checkedAtShanghai : ''),
+            subscriptionInfo: (item && typeof item.subscriptionInfo === 'object') ? item.subscriptionInfo : null,
+            lastError: typeof item.lastError === 'string' ? item.lastError : ''
+          }))
+          .filter((item) => item.url.length > 0);
+
+        if (!entries.length) {
+          urls.forEach((url) => {
+            entries.push({
+              name: inferNameFromUrl(url),
+              url,
+              updatedAtShanghai: '',
+              subscriptionInfo: null,
+              lastError: ''
+            });
+          });
+        }
+
+        const activeRaw = Number.isFinite(data.active) ? data.active : Number.parseInt(data.active, 10);
+        const active = Number.isFinite(activeRaw) ? activeRaw : 0;
+        const safeActive = entries.length ? Math.max(0, Math.min(active, entries.length - 1)) : 0;
+        return { entries, active: safeActive };
+      };
+
+      const buildSubscriptionsPayload = (entries, activeIndex) => {
+        const cleaned = entries
+          .map((entry) => ({
+            name: (entry.name || '').trim(),
+            url: (entry.url || '').trim(),
+            updatedAtShanghai: entry.updatedAtShanghai || '',
+            subscriptionInfo: entry.subscriptionInfo || null,
+            lastError: entry.lastError || ''
+          }))
+          .filter((entry) => entry.url.length > 0);
+        return {
+          active: cleaned.length ? Math.max(0, Math.min(activeIndex, cleaned.length - 1)) : 0,
+          urls: cleaned.map((entry) => entry.url),
+          items: cleaned
+        };
+      };
+
+      const formatRelativeFromShanghai = (value) => {
+        const parsed = parseDateTime(value);
+        if (!parsed) return '未更新';
+        return formatRelativeTime(parsed);
+      };
+
+      const renderSubscriptionsList = () => {
+        subsList.innerHTML = '';
+        if (!subsEntries.length) {
+          const empty = document.createElement('div');
+          empty.className = 'help';
+          empty.textContent = '暂无订阅，请先输入订阅链接并加入。';
+          subsList.appendChild(empty);
+          return;
+        }
+
+        subsEntries.forEach((entry, idx) => {
+          const row = document.createElement('div');
+          row.className = 'rounded-lg border p-2';
+          row.style.borderColor = 'var(--border)';
+          row.style.background = 'var(--panel-soft)';
+          row.style.overflow = 'hidden';
+
+          const header = document.createElement('div');
+          header.className = 'flex items-center justify-between gap-2';
+          header.style.minWidth = '0';
+          header.style.alignItems = 'flex-start';
+
+          const title = document.createElement('div');
+          title.className = 'text-sm font-semibold';
+          title.style.color = 'var(--text)';
+          title.style.flex = '1 1 auto';
+          title.style.minWidth = '0';
+          title.style.whiteSpace = 'nowrap';
+          title.style.overflow = 'hidden';
+          title.style.textOverflow = 'ellipsis';
+          const displayName = decodeMaybePercentName(entry.name || inferNameFromUrl(entry.url));
+          title.textContent = displayName;
+          title.title = displayName;
+
+          const actions = document.createElement('div');
+          actions.className = 'flex items-center gap-1';
+          actions.style.flexShrink = '0';
+          actions.style.flexWrap = 'wrap';
+          actions.style.justifyContent = 'flex-end';
+
+          const useBtn = document.createElement('button');
+          useBtn.type = 'button';
+          useBtn.className = 'rounded border px-2 py-1 text-xs';
+          useBtn.style.borderColor = idx === subsActiveIndex ? 'var(--accent-strong)' : 'var(--border)';
+          useBtn.style.background = idx === subsActiveIndex ? 'color-mix(in oklab, var(--accent) 18%, var(--panel-soft))' : 'var(--panel)';
+          useBtn.textContent = idx === subsActiveIndex ? '当前使用' : '设为当前';
+          useBtn.addEventListener('click', () => {
+            subsActiveIndex = idx;
+            renderSubscriptionsList();
+          });
+
+          const editBtn = document.createElement('button');
+          editBtn.type = 'button';
+          editBtn.className = 'rounded border px-2 py-1 text-xs';
+          editBtn.style.borderColor = 'var(--border)';
+          editBtn.style.background = 'var(--panel)';
+          editBtn.textContent = '编辑';
+          editBtn.addEventListener('click', () => {
+            subsInput.value = entry.url;
+            subsEditingIndex = idx;
+            addSubBtn.textContent = '更新导入';
+            subsError.textContent = `正在编辑：${decodeMaybePercentName(entry.name || inferNameFromUrl(entry.url))}`;
+            subsError.style.display = 'block';
+          });
+
+          const deleteBtn = document.createElement('button');
+          deleteBtn.type = 'button';
+          deleteBtn.className = 'rounded border px-2 py-1 text-xs';
+          deleteBtn.style.borderColor = 'var(--border)';
+          deleteBtn.style.background = 'var(--panel)';
+          deleteBtn.textContent = '删除';
+          deleteBtn.addEventListener('click', () => {
+            subsEntries.splice(idx, 1);
+            if (subsActiveIndex >= subsEntries.length) {
+              subsActiveIndex = Math.max(0, subsEntries.length - 1);
+            }
+            if (subsEditingIndex === idx) {
+              subsEditingIndex = -1;
+              subsInput.value = '';
+              addSubBtn.textContent = '导入';
+            } else if (subsEditingIndex > idx) {
+              subsEditingIndex -= 1;
+            }
+            renderSubscriptionsList();
+          });
+
+          actions.appendChild(useBtn);
+          actions.appendChild(editBtn);
+          actions.appendChild(deleteBtn);
+          header.appendChild(title);
+          header.appendChild(actions);
+
+          const urlEl = document.createElement('div');
+          urlEl.className = 'mt-1 text-xs font-mono';
+          urlEl.style.color = 'var(--muted)';
+          urlEl.style.wordBreak = 'break-all';
+          urlEl.textContent = entry.url;
+
+          const metaEl = document.createElement('div');
+          metaEl.className = 'mt-1 text-xs';
+          metaEl.style.color = entry.lastError ? '#ef4444' : 'var(--muted)';
+          metaEl.textContent = entry.lastError
+            ? `最近错误：${entry.lastError}`
+            : `上次更新：${formatRelativeFromShanghai(entry.updatedAtShanghai)}`;
+
+          row.appendChild(header);
+          row.appendChild(urlEl);
+          row.appendChild(metaEl);
+          subsList.appendChild(row);
+        });
       };
 
       const loadSubscriptions = async () => {
@@ -1258,14 +1511,19 @@
               continue;
             }
             const data = await res.json();
-            const urls = Array.isArray(data.urls) ? data.urls.filter(Boolean) : [];
-            const active = Number.isFinite(data.active) ? data.active : 0;
-            return { urls, active, authRequired: false, loaded: true, error: '' };
+            const normalized = normalizeSubscriptionData(data || {});
+            return {
+              entries: normalized.entries,
+              active: normalized.active,
+              authRequired: false,
+              loaded: true,
+              error: ''
+            };
           }
           throw new Error(lastError || 'subs');
         } catch (err) {
           return {
-            urls: [],
+            entries: [],
             active: 0,
             authRequired: err.message === 'auth',
             loaded: false,
@@ -1280,10 +1538,19 @@
           updateBtn.disabled = false;
         } else if (!data.loaded) {
           updateBtn.disabled = false;
-        } else if (!data.urls.length) {
+        } else if (!data.entries.length) {
           updateBtn.disabled = true;
         } else {
           updateBtn.disabled = false;
+        }
+        if (data.loaded) {
+          lastSubscriptionsSnapshot = {
+            entries: data.entries.slice(),
+            active: data.active,
+            loaded: true
+          };
+          applyLastUpdateFromSubscriptions(data.entries, data.active, true);
+          applySubscriptionInfoFromEntries(data.entries, data.active, true);
         }
         return data;
       };
@@ -1292,7 +1559,7 @@
 
       const bootstrapSubscriptionsUI = async () => {
         // 容器刚启动时 subscriptions.json 可能短暂不可读，做有限重试避免长期停留“读取中”
-        let lastData = { urls: [], active: 0, authRequired: false, loaded: false, error: '' };
+        let lastData = { entries: [], active: 0, authRequired: false, loaded: false, error: '' };
         for (let i = 0; i < 8; i += 1) {
           const data = await refreshSubscriptionsUI();
           lastData = data;
@@ -1310,8 +1577,12 @@
         if (data.authRequired) {
           return;
         }
-        subsText.value = data.urls.join('\n');
-        setActiveOptions(data.urls, data.active);
+        subsEntries = data.entries.slice();
+        subsActiveIndex = data.active;
+        subsEditingIndex = -1;
+        subsInput.value = '';
+        addSubBtn.textContent = '导入';
+        renderSubscriptionsList();
         subsError.style.display = 'none';
         if (settingsModal.classList.contains('open')) {
           settingsModal.classList.remove('open');
@@ -1322,21 +1593,114 @@
       closeSubs.addEventListener('click', closeSubsModal);
       subsBackdrop.addEventListener('click', closeSubsModal);
 
-      subsText.addEventListener('input', () => {
-        const urls = normalizeUrls(subsText.value);
-        const activeIndex = Number(subsActive.value || 0);
-        setActiveOptions(urls, activeIndex);
+      const pollValidateResult = async (requestId) => {
+        for (let i = 0; i < 24; i += 1) {
+          await sleep(500);
+          const res = await fetchWithAuth(`/subscription-validate.json?t=${Date.now()}`, { cache: 'no-store' }, false);
+          if (!res.ok) continue;
+          const data = await res.json();
+          if (data && data.requestId === requestId) {
+            return data;
+          }
+        }
+        throw new Error('validate-timeout');
+      };
+
+      const validateSubscription = async (url) => {
+        let parsedUrl;
+        try {
+          parsedUrl = new URL(url);
+        } catch (err) {
+          throw new Error('订阅链接格式不正确。');
+        }
+        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+          throw new Error('订阅链接必须使用 http 或 https。');
+        }
+        const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+        const triggerRes = await fetchWithAuth('/subscription-validate', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId, url })
+        });
+        if (!triggerRes.ok) {
+          throw new Error('无法提交订阅校验请求，请稍后重试。');
+        }
+        return pollValidateResult(requestId);
+      };
+
+      const addOrUpdateSubscription = async () => {
+        const url = (subsInput.value || '').trim();
+        if (!url) {
+          subsError.textContent = '请输入订阅链接。';
+          subsError.style.display = 'block';
+          return;
+        }
+        const targetNormalized = normalizeUrlForCompare(url);
+        const duplicatedIndex = subsEntries.findIndex((entry, idx) => {
+          if (subsEditingIndex >= 0 && idx === subsEditingIndex) return false;
+          return normalizeUrlForCompare(entry.url) === targetNormalized;
+        });
+        if (duplicatedIndex >= 0) {
+          subsError.textContent = '该订阅链接已存在，请勿重复导入。';
+          subsError.style.display = 'block';
+          return;
+        }
+        addSubBtn.textContent = '校验中...';
+        addSubBtn.disabled = true;
+        try {
+          const result = await validateSubscription(url);
+          if (!result.ok) {
+            throw new Error(result.message || '订阅校验失败。');
+          }
+          const nextEntry = {
+            name: decodeMaybePercentName((result.name || '').trim()) || inferNameFromUrl(url),
+            url,
+            updatedAtShanghai: (result.updatedAtShanghai || result.checkedAtShanghai || '').trim(),
+            subscriptionInfo: (result && typeof result.subscriptionInfo === 'object') ? result.subscriptionInfo : (
+              (subsEditingIndex >= 0 && subsEntries[subsEditingIndex] && subsEntries[subsEditingIndex].url === url)
+                ? (subsEntries[subsEditingIndex].subscriptionInfo || null)
+                : null
+            ),
+            lastError: ''
+          };
+          if (subsEditingIndex >= 0 && subsEditingIndex < subsEntries.length) {
+            subsEntries[subsEditingIndex] = nextEntry;
+          } else {
+            subsEntries.push(nextEntry);
+            if (subsEntries.length === 1) {
+              subsActiveIndex = 0;
+            }
+          }
+          subsEditingIndex = -1;
+          subsInput.value = '';
+          addSubBtn.textContent = '导入';
+          subsError.style.display = 'none';
+          renderSubscriptionsList();
+        } catch (err) {
+          addSubBtn.textContent = subsEditingIndex >= 0 ? '更新导入' : '导入';
+          subsError.textContent = err.message || '订阅校验失败。';
+          subsError.style.display = 'block';
+        } finally {
+          addSubBtn.disabled = false;
+        }
+      };
+
+      addSubBtn.addEventListener('click', addOrUpdateSubscription);
+      subsInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          addOrUpdateSubscription();
+        }
       });
 
       saveSubs.addEventListener('click', async () => {
-        const urls = normalizeUrls(subsText.value);
-        const activeIndex = Number(subsActive.value || 0);
-        if (!urls.length) {
+        if (!subsEntries.length) {
           subsError.textContent = '请至少填写一个订阅链接。';
           subsError.style.display = 'block';
           return;
         }
-        const payload = { active: Math.min(activeIndex, urls.length - 1), urls };
+        const previousActive = subsActiveIndex;
+        const payload = buildSubscriptionsPayload(subsEntries, subsActiveIndex);
         saveSubs.textContent = '保存中...';
         saveSubs.disabled = true;
         try {
@@ -1348,7 +1712,23 @@
           if (!res.ok) throw new Error('save');
           subsError.style.display = 'none';
           saveSubs.textContent = '已保存';
-          await refreshSubscriptionsUI();
+          const updated = await refreshSubscriptionsUI();
+          subsEntries = updated.entries.slice();
+          subsActiveIndex = updated.active;
+          renderSubscriptionsList();
+          applySubscriptionInfoFromEntries(subsEntries, subsActiveIndex, true);
+          const shouldPollInfo = previousActive !== subsActiveIndex;
+          if (shouldPollInfo) {
+            lockSubscriptionInfo();
+            for (let i = 0; i < 6; i += 1) {
+              await sleep(1200);
+              if (await fetchSubscriptionInfo()) {
+                break;
+              }
+            }
+          } else {
+            await fetchSubscriptionInfo();
+          }
           setTimeout(() => {
             saveSubs.textContent = '保存';
             saveSubs.disabled = false;
@@ -1498,14 +1878,26 @@
         await ensureAdminSession();
         fillConnectionInfo();
         const data = await bootstrapSubscriptionsUI();
-        if (data.loaded && !data.authRequired && !data.urls.length) {
-          subsText.value = '';
-          setActiveOptions([], 0);
+        if (data.loaded && !data.authRequired && !data.entries.length) {
+          subsEntries = [];
+          subsActiveIndex = 0;
+          subsEditingIndex = -1;
+          subsInput.value = '';
+          addSubBtn.textContent = '导入';
+          renderSubscriptionsList();
           subsError.textContent = '需要先填写订阅链接才能初始化。';
           subsError.style.display = 'block';
           openSubsModal(true);
         }
         applyLatencyModeUI();
+        if (data && data.loaded) {
+          lastSubscriptionsSnapshot = {
+            entries: data.entries.slice(),
+            active: data.active,
+            loaded: true
+          };
+          applyLastUpdateFromSubscriptions(data.entries, data.active, true);
+        }
         fetchStatus();
         const hasSubscriptionInfo = await fetchSubscriptionInfo();
         if (!hasSubscriptionInfo) {
