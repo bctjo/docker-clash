@@ -7,6 +7,7 @@ stages:
 # CI_REGISTRY / CI_REGISTRY_USER / CI_REGISTRY_PASSWORD
 variables:
   DOCKER_DRIVER: overlay2
+  DOCKER_HOST: unix:///var/run/docker.sock
   # 避免 DinD 在共享 Runner 上的 TLS 问题（也可改为启用 TLS）
   DOCKER_TLS_CERTDIR: ""
   # 可选：在 GitLab CI/CD Variables 中配置以下变量后可登录 Docker Hub
@@ -26,9 +27,6 @@ lint_bash_syntax:
 lint_compose_config:
   stage: lint
   image: docker:27
-  services:
-    - name: docker:27-dind
-      command: ["--tls=false"]
   rules:
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH
@@ -40,9 +38,6 @@ lint_compose_config:
 build_image:
   stage: build
   image: docker:27
-  services:
-    - name: docker:27-dind
-      command: ["--tls=false"]
   rules:
     # 仅在版本 tag（v*）时构建并推送镜像
     - if: '$CI_COMMIT_TAG =~ /^v.*/'
