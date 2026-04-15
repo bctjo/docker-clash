@@ -1593,9 +1593,13 @@
       closeSubs.addEventListener('click', closeSubsModal);
       subsBackdrop.addEventListener('click', closeSubsModal);
 
+      const SUBS_VALIDATE_POLL_INTERVAL_MS = 1000;
+      const SUBS_VALIDATE_TIMEOUT_MS = 300000;
+
       const pollValidateResult = async (requestId) => {
-        for (let i = 0; i < 24; i += 1) {
-          await sleep(500);
+        const deadline = Date.now() + SUBS_VALIDATE_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+          await sleep(SUBS_VALIDATE_POLL_INTERVAL_MS);
           const res = await fetchWithAuth(`/subscription-validate.json?t=${Date.now()}`, { cache: 'no-store' }, false);
           if (!res.ok) continue;
           const data = await res.json();
@@ -1603,7 +1607,7 @@
             return data;
           }
         }
-        throw new Error('validate-timeout');
+        throw new Error('订阅校验超时，请稍后重试，或调大容器环境变量 SUBSCR_VALIDATE_MAX_TIME。');
       };
 
       const validateSubscription = async (url) => {

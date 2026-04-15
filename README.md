@@ -64,6 +64,9 @@ docker compose up -d
 你通常只需要关心这几个：
 
 - `SUBSCR_URLS`: 订阅地址（逗号分隔）
+- `SUBSCR_VALIDATE_MAX_TIME`: 导入订阅时单次校验下载超时（秒，默认 120）
+- `SUBSCR_DOWNLOAD_MAX_TIME`: 更新订阅时单次下载超时（秒，默认 120）
+- `SUBSCR_CONNECT_TIMEOUT`: 订阅下载连接超时（秒，默认 15）
 - `PORTAL_ADMIN_KEY`: Portal 管理密码
 - `UPDATE_INTERVAL`: 自动更新间隔（秒，默认 43200）
 - `CLASH_SECRET`: API 密钥（为空会自动生成）

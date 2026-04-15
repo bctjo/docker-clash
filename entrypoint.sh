@@ -10,6 +10,11 @@ CLASH_TPROXY_PORT=${CLASH_TPROXY_PORT:-7892}
 CLASH_MIXED_PORT=${CLASH_MIXED_PORT:-7893}
 CLASH_SECRET=${CLASH_SECRET:-}
 SUBSCR_UA=${SUBSCR_UA:-ClashMeta}
+SUBSCR_CONNECT_TIMEOUT=${SUBSCR_CONNECT_TIMEOUT:-15}
+SUBSCR_VALIDATE_MAX_TIME=${SUBSCR_VALIDATE_MAX_TIME:-120}
+SUBSCR_DOWNLOAD_MAX_TIME=${SUBSCR_DOWNLOAD_MAX_TIME:-120}
+SUBSCR_RETRY=${SUBSCR_RETRY:-2}
+SUBSCR_RETRY_DELAY=${SUBSCR_RETRY_DELAY:-2}
 PORTAL_ADMIN_KEY=${PORTAL_ADMIN_KEY:-}
 # 更新间隔，默认 12 小时 (43200 秒)
 UPDATE_INTERVAL=${UPDATE_INTERVAL:-43200}
@@ -71,6 +76,36 @@ ensure_public_file_readable() {
     [[ -f "$file" ]] || return 0
     chmod 644 "$file" || true
     chown www-data:www-data "$file" 2>/dev/null || true
+}
+
+curl_subscription() {
+    local url="$1"
+    local header_file="$2"
+    local output_file="$3"
+    local max_time="$4"
+
+    if [[ -n "$SUBSCR_UA" ]]; then
+        curl -fsSL \
+            --retry "$SUBSCR_RETRY" \
+            --retry-delay "$SUBSCR_RETRY_DELAY" \
+            --retry-max-time "$max_time" \
+            --connect-timeout "$SUBSCR_CONNECT_TIMEOUT" \
+            --max-time "$max_time" \
+            -A "$SUBSCR_UA" \
+            -D "$header_file" \
+            "$url" \
+            -o "$output_file"
+    else
+        curl -fsSL \
+            --retry "$SUBSCR_RETRY" \
+            --retry-delay "$SUBSCR_RETRY_DELAY" \
+            --retry-max-time "$max_time" \
+            --connect-timeout "$SUBSCR_CONNECT_TIMEOUT" \
+            --max-time "$max_time" \
+            -D "$header_file" \
+            "$url" \
+            -o "$output_file"
+    fi
 }
 
 # ========= 函数：下载文件（带超时/重试/过期检查） =========
@@ -741,22 +776,12 @@ validate_subscription_url() {
     fi
 
     rm -f "$body_file" "$header_file"
-    if [[ -n "$SUBSCR_UA" ]]; then
-        if curl -fsSL --retry 2 --retry-delay 1 --connect-timeout 8 --max-time 30 -A "$SUBSCR_UA" -D "$header_file" "$url" -o "$body_file"; then
-            :
-        else
-            curl_code=$?
-            write_subscription_validate_result "false" "$url" "" "订阅链接不可用（下载失败，curl=$curl_code）。" "$request_id"
-            return 1
-        fi
+    if curl_subscription "$url" "$header_file" "$body_file" "$SUBSCR_VALIDATE_MAX_TIME"; then
+        :
     else
-        if curl -fsSL --retry 2 --retry-delay 1 --connect-timeout 8 --max-time 30 -D "$header_file" "$url" -o "$body_file"; then
-            :
-        else
-            curl_code=$?
-            write_subscription_validate_result "false" "$url" "" "订阅链接不可用（下载失败，curl=$curl_code）。" "$request_id"
-            return 1
-        fi
+        curl_code=$?
+        write_subscription_validate_result "false" "$url" "" "订阅链接不可用（下载失败或超时，curl=$curl_code）。" "$request_id"
+        return 1
     fi
 
     if [[ ! -s "$body_file" ]]; then
@@ -1521,18 +1546,10 @@ update_resources() {
         rm -f "$header_file" "${cache_file}.tmp"
         log "Downloading subscription $idx..."
 
-        if [[ -n "$SUBSCR_UA" ]]; then
-            if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 60 -A "$SUBSCR_UA" -D "$header_file" "${SUBS_URLS_ARRAY[$idx]}" -o "${cache_file}.tmp"; then
-                :
-            else
-                curl_code=$?
-            fi
+        if curl_subscription "${SUBS_URLS_ARRAY[$idx]}" "$header_file" "${cache_file}.tmp" "$SUBSCR_DOWNLOAD_MAX_TIME"; then
+            :
         else
-            if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 60 -D "$header_file" "${SUBS_URLS_ARRAY[$idx]}" -o "${cache_file}.tmp"; then
-                :
-            else
-                curl_code=$?
-            fi
+            curl_code=$?
         fi
 
         if [[ -s "${cache_file}.tmp" ]]; then

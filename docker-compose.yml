@@ -23,6 +23,9 @@ services:
       # CLASH_SOCKS_PORT: "7891"   # SOCKS5 代理端口（默认 7891）
       # CLASH_TPROXY_PORT: "7892"  # TPROXY 端口（默认 7892）
       # CLASH_MIXED_PORT: "7893"   # MIXED 端口（默认 7893）
+      # SUBSCR_VALIDATE_MAX_TIME: "120" # 导入订阅校验下载超时（秒）
+      # SUBSCR_DOWNLOAD_MAX_TIME: "120" # 更新订阅下载超时（秒）
+      # SUBSCR_CONNECT_TIMEOUT: "15"    # 订阅下载连接超时（秒）
 
 networks:
   clash_net:
