@@ -14,6 +14,9 @@ services:
       - "7893:7893" # MIXED
     networks:
       - clash_net
+    dns:
+      - 223.5.5.5
+      - 119.29.29.29
     environment:
       PORTAL_ADMIN_KEY: "your_password"       # Portal 基础认证密码（注释则不启用）
       GEODATA_AUTO_UPDATE: "true"   # Geodata 自动更新（首启下载失败/超时会自动熔断本次运行）
