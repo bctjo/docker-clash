@@ -10,144 +10,88 @@ permissions:
   packages: write
 
 concurrency:
-  group: auto-release-mihomo
+  group: publish-ghcr
   cancel-in-progress: false
-
-env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
   auto-release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Check mihomo update
         id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tracked_file="core/mihomo-version.txt"
-          latest_tag="$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | sed -n 's/^[[:space:]]*\"tag_name\": \"\([^\"]*\)\",/\1/p' | head -n1)"
-          current_tag=""
+          latest_tag="$(curl -fsSL --retry 3 --retry-delay 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 30 --retry-max-time 120 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -er '.tag_name')"
+          [[ "$latest_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid mihomo version" >&2; exit 1; }
+          current_tag="$(tr -d '[:space:]' < core/mihomo-version.txt)"
+          changed=false
+          [[ "$latest_tag" == "$current_tag" ]] || changed=true
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
 
-          if [[ -f "${tracked_file}" ]]; then
-            current_tag="$(tr -d '[:space:]' < "${tracked_file}")"
-          fi
-
-          if [[ -z "${latest_tag}" || "${latest_tag}" == "null" ]]; then
-            echo "Failed to resolve latest mihomo tag" >&2
-            exit 1
-          fi
-
-          if [[ "${latest_tag}" == "${current_tag}" ]]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
-            echo "No mihomo update detected (${latest_tag})"
-            exit 0
-          fi
-
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-          echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
-
-      - name: Derive next project tag
-        id: next
+      - name: Prepare local version commit
+        id: version
         if: steps.check.outputs.changed == 'true'
+        env:
+          MIHOMO_TAG: ${{ steps.check.outputs.latest_tag }}
         run: |
           set -euo pipefail
-          latest_project_tag="$(git tag --list 'v*' | sort -V | tail -n1)"
-
-          if [[ -z "${latest_project_tag}" ]]; then
-            next_tag="v1.0.0"
+          latest="$(git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)"
+          if [[ -z "$latest" ]]; then
+            tag=v1.0.0
           else
-            if [[ ! "${latest_project_tag}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-              echo "Latest project tag format is invalid: ${latest_project_tag}" >&2
-              exit 1
-            fi
-
-            major="${BASH_REMATCH[1]}"
-            minor="${BASH_REMATCH[2]}"
-            patch="${BASH_REMATCH[3]}"
-            next_patch=$((patch + 1))
-            next_tag="v${major}.${minor}.${next_patch}"
+            IFS=. read -r major minor patch <<< "${latest#v}"
+            tag="v$major.$minor.$((10#$patch + 1))"
           fi
-
-          next_version="${next_tag#v}"
+          printf '%s\n' "$MIHOMO_TAG" > core/mihomo-version.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add core/mihomo-version.txt
+          git commit -m "chore(core): track mihomo $MIHOMO_TAG"
           {
-            echo "next_tag=${next_tag}"
-            echo "next_version=${next_version}"
+            echo "tag=$tag"
+            echo "version=${tag#v}"
+            echo "revision=$(git rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Commit tracked mihomo tag and push new project tag
+      # Failed builds leave the tracked remote version unchanged for retry.
+      - name: Publish image
         if: steps.check.outputs.changed == 'true'
+        uses: ./.github/actions/publish
+        with:
+          version: ${{ steps.version.outputs.version }}
+          revision: ${{ steps.version.outputs.revision }}
+          token: ${{ github.token }}
+
+      - name: Commit successful publication
+        if: steps.check.outputs.changed == 'true'
+        env:
+          PROJECT_TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          mkdir -p core
-          printf '%s\n' "${{ steps.check.outputs.latest_tag }}" > core/mihomo-version.txt
+          git tag "$PROJECT_TAG"
+          git push --atomic origin "HEAD:$GITHUB_REF_NAME" "$PROJECT_TAG"
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add core/mihomo-version.txt
-          git commit -m "chore(core): track mihomo ${{ steps.check.outputs.latest_tag }}"
-
-          git tag "${{ steps.next.outputs.next_tag }}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-          git push origin "${{ steps.next.outputs.next_tag }}"
-
-      - name: Set up QEMU
-        if: steps.check.outputs.changed == 'true'
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        if: steps.check.outputs.changed == 'true'
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GHCR
-        if: steps.check.outputs.changed == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download mihomo cores (official GitHub)
-        if: steps.check.outputs.changed == 'true'
+      # Token pushes do not trigger tag workflows; also repair interrupted releases.
+      - name: Ensure draft release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tracked_tag=""
-          if [[ -f core/mihomo-version.txt ]]; then
-            tracked_tag="$(tr -d '[:space:]' < core/mihomo-version.txt)"
-          fi
-
-          if [[ -z "${tracked_tag}" ]]; then
-            echo "mihomo-version.txt is empty" >&2
-            exit 1
-          fi
-
-          tag="${tracked_tag}"
-
-          mkdir -p core
-          curl -fL "https://github.com/MetaCubeX/mihomo/releases/download/${tag}/mihomo-linux-amd64-compatible-${tag}.gz" -o /tmp/mihomo-linux-amd64.gz
-          curl -fL "https://github.com/MetaCubeX/mihomo/releases/download/${tag}/mihomo-linux-arm64-${tag}.gz" -o /tmp/mihomo-linux-arm64.gz
-          gunzip -c /tmp/mihomo-linux-amd64.gz > core/clash-linux-amd64
-          gunzip -c /tmp/mihomo-linux-arm64.gz > core/clash-linux-arm64
-          chmod +x core/clash-linux-amd64 core/clash-linux-arm64
-          file core/clash-linux-amd64 core/clash-linux-arm64
-
-      - name: Build and push image
-        if: steps.check.outputs.changed == 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          build-args: |
-            APP_VERSION=${{ steps.next.outputs.next_version }}
-            APP_REVISION=${{ github.sha }}
-            APP_SOURCE=${{ github.server_url }}/${{ github.repository }}
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ steps.next.outputs.next_version }}
-            ${{ env.IMAGE_NAME }}:latest
+          tag="$(git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)"
+          [[ -n "$tag" ]] || exit 0
+          if gh release view "$tag" > /dev/null 2>&1; then exit 0; fi
+          archive="docker-clash-$tag.tar.gz"
+          git archive --format=tar.gz --output "$archive" "$tag"
+          gh release create "$tag" "$archive" --verify-tag --draft --title "$tag" --notes '请手动补充本版本更新日志。'

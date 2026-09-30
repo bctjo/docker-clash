@@ -2,7 +2,7 @@
 set -euo pipefail
 
 escape_json() {
-  printf '%s' "$1" | awk 'BEGIN{RS=""; ORS=""} {gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); gsub(/\r/,"\\r"); gsub(/\n/,"\\n"); print}'
+  jq -jn --arg value "$1" '($value|tojson)[1:-1]'
 }
 
 probe_site() {
@@ -17,7 +17,9 @@ probe_site() {
   local error_msg=""
   local rc=0
 
-  output=$(curl -L -sS -o /dev/null --connect-timeout 5 --max-time 20 -w "%{http_code} %{time_total}" "$url" 2>&1) || rc=$?
+  local -a proxy_args=()
+  [[ -z "${CONNECTIVITY_PROXY:-}" ]] || proxy_args+=(--proxy "$CONNECTIVITY_PROXY" --noproxy '')
+  output=$(curl "${proxy_args[@]}" -L -sS -o /dev/null --connect-timeout 5 --max-time 20 -w "%{http_code} %{time_total}" "$url" 2>&1) || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     code=$(printf '%s' "$output" | awk '{print $1}')
     total=$(printf '%s' "$output" | awk '{print $2}')
@@ -44,12 +46,13 @@ probe_site() {
 now_epoch=$(date +%s)
 checked_at=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
 
-yt=$(probe_site "youtube" "YouTube" "https://www.youtube.com/generate_204")
-gh=$(probe_site "github" "GitHub" "https://github.com/")
-tmdb=$(probe_site "tmdb" "TMDB" "https://www.themoviedb.org/")
-bd=$(probe_site "baidu" "百度" "https://www.baidu.com/")
+yt=$(probe_site "youtube" "YouTube" "${PROXY_TEST_URL_YOUTUBE:-https://www.youtube.com/generate_204}")
+gh=$(probe_site "github" "GitHub" "${PROXY_TEST_URL_GITHUB:-https://github.com/}")
+tmdb=$(probe_site "tmdb" "TMDB" "${PROXY_TEST_URL_TMDB:-https://www.themoviedb.org/}")
+bd=$(probe_site "baidu" "百度" "${PROXY_TEST_URL_BAIDU:-https://www.baidu.com/}")
 
-printf '{"checkedAtShanghai":"%s","checkedAtEpoch":%s,"sites":[%s,%s,%s,%s]}\n' \
+printf '{"mode":"%s","checkedAtShanghai":"%s","checkedAtEpoch":%s,"sites":[%s,%s,%s,%s]}\n' \
+  "${PROBE_MODE:-browser}" \
   "$(escape_json "$checked_at")" \
   "$now_epoch" \
   "$yt" "$gh" "$tmdb" "$bd"

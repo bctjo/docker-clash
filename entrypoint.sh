@@ -15,11 +15,16 @@ SUBSCR_VALIDATE_MAX_TIME=${SUBSCR_VALIDATE_MAX_TIME:-120}
 SUBSCR_DOWNLOAD_MAX_TIME=${SUBSCR_DOWNLOAD_MAX_TIME:-120}
 SUBSCR_RETRY=${SUBSCR_RETRY:-2}
 SUBSCR_RETRY_DELAY=${SUBSCR_RETRY_DELAY:-2}
+SUBSCR_MAX_BYTES=${SUBSCR_MAX_BYTES:-16777216}
 PORTAL_ADMIN_KEY=${PORTAL_ADMIN_KEY:-}
+CONFIG_VALIDATE_MAX_TIME=${CONFIG_VALIDATE_MAX_TIME:-90}
+PORTAL_TASK_DIR="/opt/portal/tasks"
+PORTAL_REQUEST_DIR="/opt/portal/requests"
 # 更新间隔，默认 12 小时 (43200 秒)
 UPDATE_INTERVAL=${UPDATE_INTERVAL:-43200}
 
 CONFIG_DIR="/root/.config/clash"
+APPLIED_STATE_FILE="$CONFIG_DIR/applied-state.json"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 MMDB_FILE="$CONFIG_DIR/Country.mmdb"
 GEOSITE_FILE="$CONFIG_DIR/GeoSite.dat"
@@ -61,12 +66,39 @@ LATENCY_ROUTER_PROBE_SCRIPT="/opt/scripts/proxy_connectivity_probe.sh"
 BUILTIN_RULE_FILE="${BUILTIN_RULE_FILE:-/opt/builtin-rules.yaml}"
 IMAGE_GEODATA_DIR="${IMAGE_GEODATA_DIR:-/opt/geodata}"
 FIRST_START_MARKER="$CONFIG_DIR/.first-start.done"
-CURRENT_ACTIVE_INDEX=0
 
 mkdir -p "$CONFIG_DIR" "$TMP_DIR"
 mkdir -p "$SUBS_CACHE_DIR"
 
 # ========= 函数：日志 =========
+validate_environment() {
+    local name value
+    local -A used_ports=()
+    for name in PORTAL_PORT DASH_PORT CLASH_HTTP_PORT CLASH_SOCKS_PORT CLASH_TPROXY_PORT CLASH_MIXED_PORT; do
+        value="${!name}"
+        if [[ ! "$value" =~ ^[1-9][0-9]{0,4}$ ]] || (( value > 65535 )); then
+            log "ERROR: Invalid port in $name."
+            return 1
+        fi
+        if [[ -n "${used_ports[$value]:-}" ]]; then
+            log "ERROR: Duplicate port in $name and ${used_ports[$value]}."
+            return 1
+        fi
+        used_ports[$value]="$name"
+    done
+    for name in UPDATE_INTERVAL SUBSCR_CONNECT_TIMEOUT SUBSCR_VALIDATE_MAX_TIME SUBSCR_DOWNLOAD_MAX_TIME CONFIG_VALIDATE_MAX_TIME; do
+        value="${!name}"
+        if [[ ! "$value" =~ ^[0-9]{1,7}$ ]] || (( 10#$value < 1 )); then
+            log "ERROR: $name must be a positive number of seconds."
+            return 1
+        fi
+    done
+    if [[ "$CLASH_SECRET" == *$'\n'* || "$CLASH_SECRET" == *$'\r'* || "$PORTAL_ADMIN_KEY" == *$'\n'* || "$PORTAL_ADMIN_KEY" == *$'\r'* ]]; then
+        log "ERROR: Passwords cannot contain line breaks."
+        return 1
+    fi
+}
+
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [entrypoint] $1"
 }
@@ -86,6 +118,8 @@ curl_subscription() {
 
     if [[ -n "$SUBSCR_UA" ]]; then
         curl -fsSL \
+            --proto '=http,https' --proto-redir '=http,https' \
+            --max-filesize "$SUBSCR_MAX_BYTES" \
             --retry "$SUBSCR_RETRY" \
             --retry-delay "$SUBSCR_RETRY_DELAY" \
             --retry-max-time "$max_time" \
@@ -97,6 +131,8 @@ curl_subscription() {
             -o "$output_file"
     else
         curl -fsSL \
+            --proto '=http,https' --proto-redir '=http,https' \
+            --max-filesize "$SUBSCR_MAX_BYTES" \
             --retry "$SUBSCR_RETRY" \
             --retry-delay "$SUBSCR_RETRY_DELAY" \
             --retry-max-time "$max_time" \
@@ -201,32 +237,38 @@ seed_geodata_from_image() {
 # ========= 函数：生成 Secret 并持久化 =========
 generate_secret() {
     local secret
-    secret=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 8)
+    secret=$(openssl rand -hex 24)
     printf '%s' "$secret"
 }
 
 ensure_secret() {
-    if [[ -n "$CLASH_SECRET" ]]; then
-        return
+    if [[ -z "$CLASH_SECRET" && -f "$PORTAL_STATE_FILE" ]]; then
+        CLASH_SECRET=$(jq -r '.secret // empty' "$PORTAL_STATE_FILE" 2>/dev/null || true)
     fi
-    if [[ -f "$PORTAL_STATE_FILE" ]]; then
-        CLASH_SECRET=$(sed -n 's/.*"secret"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' "$PORTAL_STATE_FILE" | head -n 1)
-    fi
-    if [[ -z "$CLASH_SECRET" ]]; then
-        CLASH_SECRET=$(generate_secret)
-        cat > "$PORTAL_STATE_FILE" <<EOF
-{"secret":"$CLASH_SECRET"}
-EOF
+    [[ -n "$CLASH_SECRET" ]] || CLASH_SECRET=$(generate_secret)
+    (umask 077; jq -n --arg secret "$CLASH_SECRET" '{secret:$secret}' > "$PORTAL_STATE_FILE.tmp")
+    chmod 600 "$PORTAL_STATE_FILE.tmp"
+    mv "$PORTAL_STATE_FILE.tmp" "$PORTAL_STATE_FILE"
+}
+
+ensure_portal_admin_key() {
+    local key_file="$CONFIG_DIR/portal-admin.key"
+    if [[ -z "$PORTAL_ADMIN_KEY" ]]; then
+        if [[ -s "$key_file" ]]; then
+            PORTAL_ADMIN_KEY=$(cat "$key_file")
+        else
+            PORTAL_ADMIN_KEY=$(generate_secret)
+            (umask 077; printf '%s\n' "$PORTAL_ADMIN_KEY" > "$key_file.tmp")
+            mv "$key_file.tmp" "$key_file"
+            log "Portal admin password generated. Read $key_file or set PORTAL_ADMIN_KEY."
+        fi
     fi
 }
 
 # ========= 函数：生成 Portal 配置 =========
-escape_js() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
 
 escape_json() {
-    printf '%s' "$1" | awk 'BEGIN{RS=""; ORS=""} {gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); gsub(/\r/,"\\r"); gsub(/\n/,"\\n"); print}'
+    jq -jn --arg value "$1" '($value|tojson)[1:-1]'
 }
 
 decode_percent_text() {
@@ -247,42 +289,16 @@ decode_percent_text() {
 }
 
 write_portal_config() {
-    local DASH_PORT_ESC
-    local PORTAL_PORT_ESC
-    local HTTP_PORT_ESC
-    local SOCKS_PORT_ESC
-    local TPROXY_PORT_ESC
-    local MIXED_PORT_ESC
-    local SECRET_ESC
-    local UPDATE_INTERVAL_ESC
-    local ADMIN_AUTH_ENABLED
-
-    DASH_PORT_ESC=$(escape_js "$DASH_PORT")
-    PORTAL_PORT_ESC=$(escape_js "$PORTAL_PORT")
-    HTTP_PORT_ESC=$(escape_js "$CLASH_HTTP_PORT")
-    SOCKS_PORT_ESC=$(escape_js "$CLASH_SOCKS_PORT")
-    TPROXY_PORT_ESC=$(escape_js "$CLASH_TPROXY_PORT")
-    MIXED_PORT_ESC=$(escape_js "$CLASH_MIXED_PORT")
-    SECRET_ESC=$(escape_js "$CLASH_SECRET")
-    UPDATE_INTERVAL_ESC=$(escape_js "$UPDATE_INTERVAL")
-    ADMIN_AUTH_ENABLED="false"
-    if [[ -n "$PORTAL_ADMIN_KEY" ]]; then
-        ADMIN_AUTH_ENABLED="true"
-    fi
-
-    cat > "$PORTAL_CONFIG" <<EOF
-window.__PORTAL_CONFIG__ = {
-  dashPort: "$DASH_PORT_ESC",
-  portalPort: "$PORTAL_PORT_ESC",
-  httpPort: "$HTTP_PORT_ESC",
-  socksPort: "$SOCKS_PORT_ESC",
-  tproxyPort: "$TPROXY_PORT_ESC",
-  mixedPort: "$MIXED_PORT_ESC",
-  secret: "$SECRET_ESC",
-  updateIntervalSec: "$UPDATE_INTERVAL_ESC",
-  adminAuthEnabled: $ADMIN_AUTH_ENABLED
-};
-EOF
+    local json
+    json=$(jq -n --arg dashPort "$DASH_PORT" --arg portalPort "$PORTAL_PORT" \
+        --arg httpPort "$CLASH_HTTP_PORT" --arg socksPort "$CLASH_SOCKS_PORT" \
+        --arg tproxyPort "$CLASH_TPROXY_PORT" --arg mixedPort "$CLASH_MIXED_PORT" \
+        --arg updateIntervalSec "$UPDATE_INTERVAL" \
+        '{dashPort:$dashPort,portalPort:$portalPort,httpPort:$httpPort,socksPort:$socksPort,
+          tproxyPort:$tproxyPort,mixedPort:$mixedPort,updateIntervalSec:$updateIntervalSec,adminAuthEnabled:true}')
+    printf 'window.__PORTAL_CONFIG__ = %s;\n' "$json" > "$PORTAL_CONFIG"
+    jq -n --arg secret "$CLASH_SECRET" '{secret:$secret}' > /opt/portal/connection.json
+    ensure_public_file_readable /opt/portal/connection.json
 }
 
 write_subscriptions_file() {
@@ -320,11 +336,6 @@ write_subscriptions_file() {
 }
 
 init_subscriptions() {
-    if [[ -f "$SUBSCRIPTIONS_PUBLIC" ]]; then
-        cp "$SUBSCRIPTIONS_PUBLIC" "$SUBSCRIPTIONS_FILE"
-        ensure_public_file_readable "$SUBSCRIPTIONS_PUBLIC"
-        return
-    fi
     if [[ -f "$SUBSCRIPTIONS_FILE" ]]; then
         cp "$SUBSCRIPTIONS_FILE" "$SUBSCRIPTIONS_PUBLIC"
         ensure_public_file_readable "$SUBSCRIPTIONS_PUBLIC"
@@ -341,7 +352,10 @@ init_subscriptions() {
 }
 
 load_subscriptions() {
-    local source="$SUBSCRIPTIONS_PUBLIC"
+    local source="${1:-$SUBSCRIPTIONS_PUBLIC}"
+    local snapshot
+    SUBS_REQUEST_ID=""
+    SUBS_SOURCE_HASH=""
     local active
     local -a parsed_urls=()
     local -a cleaned_urls=()
@@ -369,7 +383,18 @@ load_subscriptions() {
     SUBS_INFO_MSG_ARRAY=()
 
     if [[ -f "$source" ]]; then
-        cp "$source" "$SUBSCRIPTIONS_FILE"
+        snapshot=$(mktemp "$TMP_DIR/subscriptions.XXXXXX")
+        cp "$source" "$snapshot"
+        source="$snapshot"
+        [[ -z "${2:-}" ]] || cp "$snapshot" "$2"
+        SUBS_REQUEST_ID=$(jq -r '.requestId // empty' "$source" 2>/dev/null || true)
+        SUBS_SOURCE_HASH=$(sha256sum "$source" | cut -d' ' -f1)
+        trap 'rm -f "$snapshot"; trap - RETURN' RETURN
+        if ! jq -e 'def urls: .urls // [(.items // [])[] | .url];
+            type=="object" and (urls|type)=="array" and (urls|length)>0 and
+            all(urls[]; type=="string" and test("^https?://")) and ((.active // 0)|type)=="number"' "$source" >/dev/null 2>&1; then
+            return 1
+        fi
     elif [[ -f "$SUBSCRIPTIONS_FILE" ]]; then
         source="$SUBSCRIPTIONS_FILE"
         cp "$SUBSCRIPTIONS_FILE" "$SUBSCRIPTIONS_PUBLIC"
@@ -377,6 +402,8 @@ load_subscriptions() {
         return 1
     fi
 
+    SUBS_REQUEST_ID=$(jq -r '.requestId // empty' "$source")
+    SUBS_SOURCE_HASH=$(sha256sum "$source" | cut -d' ' -f1)
     # 优先使用 jq 严格解析，避免 items/name 等字段被误识别为 URL。
     active=$(jq -r 'if (.active|type)=="number" then .active else 0 end' "$source" 2>/dev/null || true)
     mapfile -t parsed_urls < <(jq -r '(.urls // []) | map(select(type=="string"))[]' "$source" 2>/dev/null || true)
@@ -401,10 +428,10 @@ load_subscriptions() {
     fi
 
     for url in "${cleaned_urls[@]}"; do
-        normalized_url="${url%/}"
+        normalized_url="$url"
         duplicate=0
         for existing in "${unique_urls[@]}"; do
-            if [[ "${existing%/}" == "$normalized_url" ]]; then
+            if [[ "$existing" == "$normalized_url" ]]; then
                 duplicate=1
                 break
             fi
@@ -429,19 +456,19 @@ load_subscriptions() {
     ACTIVE_SUB_INDEX="$parsed_active"
 
     for idx in "${!SUBS_URLS_ARRAY[@]}"; do
-        SUBS_NAMES_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].name // empty' "$source" 2>/dev/null || true)
-        SUBS_UPDATED_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].updatedAtShanghai // .items[$i].checkedAtShanghai // empty' "$source" 2>/dev/null || true)
-        SUBS_ERRORS_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].lastError // empty' "$source" 2>/dev/null || true)
-        SUBS_INFO_HAS_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.hasInfo // "false"' "$source" 2>/dev/null || echo "false")
-        SUBS_INFO_TOTAL_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.totalBytes // 0' "$source" 2>/dev/null || echo "0")
-        SUBS_INFO_UPLOAD_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.uploadBytes // 0' "$source" 2>/dev/null || echo "0")
-        SUBS_INFO_DOWNLOAD_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.downloadBytes // 0' "$source" 2>/dev/null || echo "0")
-        SUBS_INFO_USED_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.usedBytes // 0' "$source" 2>/dev/null || echo "0")
-        SUBS_INFO_REMAINING_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.remainingBytes // 0' "$source" 2>/dev/null || echo "0")
-        SUBS_INFO_USED_PERCENT_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.usedPercent // 0' "$source" 2>/dev/null || echo "0")
-        SUBS_INFO_EXPIRE_TS_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.expireTs // 0' "$source" 2>/dev/null || echo "0")
-        SUBS_INFO_EXPIRE_SH_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.expireAtShanghai // "-"' "$source" 2>/dev/null || echo "-")
-        SUBS_INFO_MSG_ARRAY[$idx]=$(jq -r --argjson i "$idx" '.items[$i].subscriptionInfo.message // "subscription-userinfo not found"' "$source" 2>/dev/null || echo "subscription-userinfo not found")
+        SUBS_NAMES_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).name // empty' "$source" 2>/dev/null || true)
+        SUBS_UPDATED_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).updatedAtShanghai // (.items // [] | map(select(.url==$url))[0]).checkedAtShanghai // empty' "$source" 2>/dev/null || true)
+        SUBS_ERRORS_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).lastError // empty' "$source" 2>/dev/null || true)
+        SUBS_INFO_HAS_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).subscriptionInfo.hasInfo // "false"' "$source" 2>/dev/null || echo "false")
+        SUBS_INFO_TOTAL_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).subscriptionInfo.totalBytes // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_UPLOAD_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).subscriptionInfo.uploadBytes // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_DOWNLOAD_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).subscriptionInfo.downloadBytes // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_USED_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).subscriptionInfo.usedBytes // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_REMAINING_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).subscriptionInfo.remainingBytes // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_USED_PERCENT_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).subscriptionInfo.usedPercent // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_EXPIRE_TS_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).subscriptionInfo.expireTs // 0' "$source" 2>/dev/null || echo "0")
+        SUBS_INFO_EXPIRE_SH_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).subscriptionInfo.expireAtShanghai // "-"' "$source" 2>/dev/null || echo "-")
+        SUBS_INFO_MSG_ARRAY[$idx]=$(jq -r --arg url "${SUBS_URLS_ARRAY[$idx]}" '(.items // [] | map(select(.url==$url))[0]).subscriptionInfo.message // "subscription-userinfo not found"' "$source" 2>/dev/null || echo "subscription-userinfo not found")
         if [[ -z "${SUBS_NAMES_ARRAY[$idx]}" ]]; then
             SUBS_NAMES_ARRAY[$idx]=$(derive_subscription_name "${SUBS_URLS_ARRAY[$idx]}" "")
         fi
@@ -453,6 +480,10 @@ load_subscriptions() {
 
 write_subscriptions_state() {
     local target="${1:-$SUBSCRIPTIONS_FILE}"
+    if [[ -n "${SUBS_SOURCE_HASH:-}" && -s "$SUBSCRIPTIONS_PUBLIC" && "$SUBS_SOURCE_HASH" != "$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)" ]]; then
+        log "Subscription state changed; preserving the newer request."
+        return 1
+    fi
     local tmp_file="${target}.tmp"
     local tmp_public="${SUBSCRIPTIONS_PUBLIC}.tmp"
     local idx
@@ -491,10 +522,20 @@ write_subscriptions_state() {
         printf ']}'
     } > "$tmp_file"
 
+    if ! jq -e . "$tmp_file" >/dev/null || [[ "$SUBS_SOURCE_HASH" != "$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)" ]]; then
+        rm -f "$tmp_file"
+        log "Subscription state changed while serializing; keeping the newer request."
+        return 1
+    fi
     mv "$tmp_file" "$target"
     cp "$target" "$tmp_public"
+    if [[ "$SUBS_SOURCE_HASH" != "$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)" ]]; then
+        rm -f "$tmp_public"
+        return 1
+    fi
     mv "$tmp_public" "$SUBSCRIPTIONS_PUBLIC"
     ensure_public_file_readable "$SUBSCRIPTIONS_PUBLIC"
+    SUBS_SOURCE_HASH=$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)
 }
 
 subscription_cache_file_by_index() {
@@ -525,6 +566,7 @@ wait_for_subscriptions() {
     log "No subscriptions configured. Waiting for portal input..."
     while true; do
         sleep 2
+        if [[ -s "$SETTINGS_PUBLIC" ]]; then cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"; fi
         if load_subscriptions; then
             log "Subscriptions configured. Initializing..."
             return 0
@@ -642,6 +684,11 @@ EOF
     cp "$PORTAL_SUB_VALIDATE_RESULT_FILE" "$tmp_public"
     mv "$tmp_public" "$PORTAL_SUB_VALIDATE_RESULT_PUBLIC"
     ensure_public_file_readable "$PORTAL_SUB_VALIDATE_RESULT_PUBLIC"
+    if [[ "$request_id" =~ ^[A-Za-z0-9-]{1,80}$ ]]; then
+        cp "$PORTAL_SUB_VALIDATE_RESULT_PUBLIC" "$PORTAL_TASK_DIR/$request_id.json.tmp"
+        mv "$PORTAL_TASK_DIR/$request_id.json.tmp" "$PORTAL_TASK_DIR/$request_id.json"
+        ensure_public_file_readable "$PORTAL_TASK_DIR/$request_id.json"
+    fi
 }
 
 derive_subscription_name() {
@@ -678,15 +725,6 @@ derive_subscription_name() {
     printf '%s' "$name"
 }
 
-subscription_cache_file_for_url() {
-    local url="$1"
-    local hash
-    if [[ -z "$url" ]]; then
-        return 1
-    fi
-    hash=$(printf '%s' "$url" | md5sum | awk '{print $1}')
-    printf '%s/%s' "$SUBS_CACHE_DIR" "$hash"
-}
 
 build_subscription_info_json_from_header() {
     local header_file="$1"
@@ -758,11 +796,8 @@ validate_subscription_url() {
     local request_id="$2"
     local body_file="$TMP_DIR/validate-sub.body"
     local header_file="$TMP_DIR/validate-sub.headers"
-    local decoded_file="$TMP_DIR/validate-sub.decoded"
     local name
     local curl_code=0
-    local compact_body=""
-    local cache_file=""
     local info_json=""
     local now_shanghai=""
 
@@ -789,43 +824,23 @@ validate_subscription_url() {
         return 1
     fi
 
-    # 订阅内容有效性校验（仅下载成功还不够）
-    # 支持：Clash YAML（proxies/proxy-providers）或常见节点链接列表（含 base64 形式）
-    if grep -aEiq '(^|[[:space:]])(proxies|proxy-providers):' "$body_file"; then
-        :
-    elif grep -aEiq '(^|[\r\n])[[:space:]]*(vmess|vless|trojan|ss|ssr|hysteria2?|tuic)://' "$body_file"; then
-        :
-    else
-        compact_body=$(tr -d '\r\n\t ' < "$body_file" 2>/dev/null || true)
-        if [[ -n "$compact_body" && ${#compact_body} -ge 32 && "$compact_body" =~ ^[A-Za-z0-9+/=]+$ ]]; then
-            if printf '%s' "$compact_body" | base64 -d > "$decoded_file" 2>/dev/null; then
-                if grep -aEiq '(vmess|vless|trojan|ss|ssr|hysteria2?|tuic)://' "$decoded_file"; then
-                    :
-                elif grep -aEiq '(^|[[:space:]])(proxies|proxy-providers):' "$decoded_file"; then
-                    :
-                else
-                    write_subscription_validate_result "false" "$url" "" "下载成功但内容不是可识别的订阅格式。" "$request_id"
-                    return 1
-                fi
-            else
-                write_subscription_validate_result "false" "$url" "" "下载成功但内容不是可识别的订阅格式。" "$request_id"
-                return 1
-            fi
-        else
-            write_subscription_validate_result "false" "$url" "" "下载成功但内容不是可识别的订阅格式。" "$request_id"
-            return 1
-        fi
+    local builtin candidate="$TMP_DIR/validate-$request_id.yaml" validation_error
+    IFS='|' read -r _ _ builtin <<< "$(read_settings)"
+    if ! validation_error=$(generate_config "$body_file" "$candidate" "$builtin" 2>&1); then
+        write_subscription_validate_result false "$url" "" "$validation_error" "$request_id"
+        rm -f "$candidate"
+        return 1
     fi
-
+    if ! validate_generated_config "$candidate"; then
+        write_subscription_validate_result false "$url" "" "Clash 配置校验失败，请检查订阅格式或模板设置。" "$request_id"
+        rm -f "$candidate"
+        return 1
+    fi
+    rm -f "$candidate"
     name=$(derive_subscription_name "$url" "$header_file")
     info_json=$(build_subscription_info_json_from_header "$header_file")
     now_shanghai=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
     write_subscription_validate_result "true" "$url" "$name" "订阅链接校验通过。" "$request_id" "$info_json" "$now_shanghai"
-    cache_file=$(subscription_cache_file_for_url "$url" 2>/dev/null || true)
-    if [[ -n "$cache_file" ]]; then
-        mkdir -p "$SUBS_CACHE_DIR"
-        cp "$body_file" "$cache_file" 2>/dev/null || true
-    fi
     return 0
 }
 
@@ -977,9 +992,12 @@ EOF
     ensure_public_file_readable "$target_public"
 }
 
-refresh_latency_cache() {
+refresh_latency_cache() (
     local mode="$1"
     local force="${2:-false}"
+    local lock_fd
+    exec {lock_fd}>"/tmp/portal-latency-$mode.lock"
+    flock "$lock_fd"
     local tmp_file
     local tmp_public
     local target_file
@@ -1003,22 +1021,67 @@ refresh_latency_cache() {
 
     tmp_file="${target_file}.tmp"
     tmp_public="${target_public}.tmp"
-    if DASH_PORT="$DASH_PORT" CLASH_SECRET="$CLASH_SECRET" "$probe_script" > "$tmp_file"; then
+    if CLASH_MIXED_PORT="$CLASH_MIXED_PORT" timeout 100 "$probe_script" > "$tmp_file"; then
+        jq --arg requestId "$force" '. + {requestId:$requestId}' "$tmp_file" > "$tmp_file.result"
+        mv "$tmp_file.result" "$tmp_file"
         mv "$tmp_file" "$target_file"
         cp "$target_file" "$tmp_public"
         mv "$tmp_public" "$target_public"
         ensure_public_file_readable "$target_public"
+        if [[ "$force" =~ ^[A-Za-z0-9-]{1,80}$ ]]; then
+            cp "$target_file" "$PORTAL_TASK_DIR/$force.json.tmp"
+            mv "$PORTAL_TASK_DIR/$force.json.tmp" "$PORTAL_TASK_DIR/$force.json"
+            ensure_public_file_readable "$PORTAL_TASK_DIR/$force.json"
+        fi
         return 0
     fi
 
     rm -f "$tmp_file"
     write_latency_error "$mode" "latency probe failed"
+    write_task_status "$force" failed "延迟检测失败或超时"
     return 1
-}
+)
 
 # ========= 函数：处理 Portal 触发更新 =========
 watch_portal_update() {
     while true; do
+        if [[ ! -f /tmp/portal-core-started && -s "$SETTINGS_PUBLIC" ]]; then
+            if jq -e '(.autoEnabled|type)=="boolean" and (.builtinEnabled|type)=="boolean" and
+                (.intervalMinutes|type)=="number" and .intervalMinutes>=0 and .intervalMinutes<=10080 and
+                (.autoEnabled==false or .intervalMinutes>=1)' "$SETTINGS_PUBLIC" >/dev/null 2>&1; then
+                cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"
+                write_task_status "$(jq -r '.requestId // empty' "$SETTINGS_PUBLIC")" success "设置已保存"
+            fi
+        fi
+        local request kind request_id request_body claimed
+        for request in "$PORTAL_REQUEST_DIR"/*/*; do
+            [[ -f "$request" ]] || continue
+            kind=$(basename "$(dirname "$request")")
+            request_id=$(basename "$request")
+            [[ "$request_id" =~ ^[A-Za-z0-9-]{1,80}$ ]] || { rm -f "$request"; continue; }
+            claimed="$TMP_DIR/request-$request_id"
+            mv "$request" "$claimed" || continue
+            request_body=$(cat "$claimed")
+            rm -f "$claimed"
+            case "$kind" in
+                updates)
+                    local scope
+                    scope=$(printf '%s' "$request_body" | jq -r '.scope // "active"' 2>/dev/null || true)
+                    [[ "$scope" == "all" ]] || scope=active
+                    update_resources update "$scope" "$request_id" || true
+                    ;;
+                validations)
+                    local url
+                    url=$(printf '%s' "$request_body" | jq -r '.url // empty' 2>/dev/null || true)
+                    validate_subscription_url "$url" "$request_id" || true
+                    ;;
+                latency-browser|latency-router)
+                    local mode="${kind#latency-}"
+                    (refresh_latency_cache "$mode" "$request_id" || true) &
+                    ;;
+            esac
+        done
+        find "$PORTAL_TASK_DIR" -type f -mmin +1440 -delete
         if [[ -f "$PORTAL_UPDATE_TRIGGER" ]]; then
             local update_req_raw
             local update_scope
@@ -1028,15 +1091,15 @@ watch_portal_update() {
             if [[ "$update_scope" != "all" ]]; then
                 update_scope="active"
             fi
-            update_resources "update" "$update_scope"
+            update_resources "update" "$update_scope" "$(printf '%s' "$update_req_raw" | jq -r ' .requestId // empty' 2>/dev/null || true)" || log "Manual update failed; worker continues."
         fi
         if [[ -f "$PORTAL_LATENCY_BROWSER_TRIGGER" ]]; then
             rm -f "$PORTAL_LATENCY_BROWSER_TRIGGER"
-            refresh_latency_cache "browser" "true"
+            refresh_latency_cache "browser" "true" || true
         fi
         if [[ -f "$PORTAL_LATENCY_ROUTER_TRIGGER" ]]; then
             rm -f "$PORTAL_LATENCY_ROUTER_TRIGGER"
-            refresh_latency_cache "router" "true"
+            refresh_latency_cache "router" "true" || true
         fi
         if [[ -f "$PORTAL_SUB_VALIDATE_TRIGGER" ]]; then
             local req_raw
@@ -1064,95 +1127,34 @@ init_settings() {
     fi
     default_minutes=$(awk "BEGIN{printf \"%.2f\", $UPDATE_INTERVAL/60}")
     cat > "$SETTINGS_FILE" <<EOF
-{"autoEnabled":true,"intervalMinutes":$default_minutes,"builtinEnabled":true}
+{"autoEnabled":true,"intervalMinutes":$default_minutes,"builtinEnabled":false}
 EOF
     cp "$SETTINGS_FILE" "$SETTINGS_PUBLIC"
     ensure_public_file_readable "$SETTINGS_PUBLIC"
 }
 
 read_settings() {
-    local enabled
-    local interval
-    local builtin
-    local source="$SETTINGS_PUBLIC"
-    if [[ ! -f "$source" ]]; then
-        source="$SETTINGS_FILE"
-    fi
-    enabled=$(sed -n 's/.*"autoEnabled"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$source" | head -n 1)
-    interval=$(sed -n 's/.*"intervalMinutes"[[:space:]]*:[[:space:]]*\([0-9.]*\).*/\1/p' "$source" | head -n 1)
-    builtin=$(sed -n 's/.*"builtinEnabled"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$source" | head -n 1)
-    if [[ -z "$enabled" ]]; then
-        enabled="true"
-    fi
-    if [[ -z "$interval" ]]; then
-        interval=$(awk "BEGIN{printf \"%.2f\", $UPDATE_INTERVAL/60}")
-    fi
-    if [[ -z "$builtin" ]]; then
-        builtin="true"
-    fi
-    printf '%s|%s|%s' "$enabled" "$interval" "$builtin"
+    local source="${1:-$SETTINGS_PUBLIC}"
+    [[ -f "$source" ]] || source="$SETTINGS_FILE"
+    jq -r --argjson minutes "$(awk "BEGIN{print $UPDATE_INTERVAL/60}")" '
+        (if (.autoEnabled|type)=="boolean" then .autoEnabled else true end | tostring) + "|" +
+        (if (.intervalMinutes|type)=="number" and .intervalMinutes>=1 and .intervalMinutes<=10080
+            then .intervalMinutes else $minutes end | tostring) + "|" +
+        (if (.builtinEnabled|type)=="boolean" then .builtinEnabled else false end | tostring)
+    ' "$source" 2>/dev/null || printf 'true|720|false'
 }
 
-build_config_from_builtin() {
-    local sub_file="$1"
-    local target_file="$2"
-    local tmp_file="${target_file}.builtin.tmp"
-
-    if [[ ! -f "$BUILTIN_RULE_FILE" ]]; then
-        log "ERROR: Built-in rule file not found: $BUILTIN_RULE_FILE"
-        return 1
-    fi
-
-    if ! awk -v url="$sub_file" '
-BEGIN { in_pp=0; in_airport=0; replaced_path=0; replaced_type=0 }
-{
-    if ($0 ~ /^proxy-providers:[[:space:]]*$/) {
-        in_pp=1
-        print
-        next
-    }
-    if (in_pp && $0 ~ /^[^[:space:]]/) {
-        in_pp=0
-        in_airport=0
-    }
-    if (in_pp && $0 ~ /^  Airport:[[:space:]]*$/) {
-        in_airport=1
-        print
-        next
-    }
-    if (in_airport && $0 ~ /^  [A-Za-z0-9_-]+:[[:space:]]*$/) {
-        in_airport=0
-    }
-    if (in_airport && $0 ~ /^    url:[[:space:]]*"/) {
-        print "    path: \"" url "\""
-        replaced_path=1
-        next
-    }
-    if (in_airport && $0 ~ /^    path:[[:space:]]*"/) {
-        print "    path: \"" url "\""
-        replaced_path=1
-        next
-    }
-    if (in_airport && $0 ~ /^    type:[[:space:]]*/) {
-        print "    type: file"
-        replaced_type=1
-        next
-    }
-    print
-}
-END {
-    if (replaced_path == 0 || replaced_type == 0) {
-        exit 2
-    }
-}
-' "$BUILTIN_RULE_FILE" > "$tmp_file"; then
-        log "ERROR: Failed to inject subscription URL into built-in rule template."
-        rm -f "$tmp_file"
-        return 1
-    fi
-
-    mv "$tmp_file" "$target_file"
-    return 0
+generate_config() {
+    local sub_file="$1" target_file="$2" builtin_enabled="$3"
+    local -a args=()
+    [[ "$builtin_enabled" != "true" ]] || args+=(--template "$BUILTIN_RULE_FILE")
+    python3 /opt/scripts/config_tool.py --subscription "$sub_file" --output "$target_file" \
+        --secret-file "$PORTAL_STATE_FILE" --ports "$(jq -nc \
+          --argjson port "$CLASH_HTTP_PORT" --argjson socks "$CLASH_SOCKS_PORT" \
+          --argjson mixed "$CLASH_MIXED_PORT" --argjson tproxy "$CLASH_TPROXY_PORT" \
+          --arg controller "0.0.0.0:$DASH_PORT" \
+          '{port:$port,"socks-port":$socks,"mixed-port":$mixed,"tproxy-port":$tproxy,"external-controller":$controller}')" \
+        "${args[@]}"
 }
 
 auto_update_loop() {
@@ -1161,25 +1163,25 @@ auto_update_loop() {
     local enabled="true"
     local interval_minutes="0"
     local next_run=0
-    local builtin_enabled="true"
-    local prev_builtin_enabled="true"
+    local builtin_enabled="false"
+    local prev_builtin_enabled="false"
     local mtime
     local subs_mtime
     local last_subs_signature=""
     local current_subs_signature=""
+    local settings_snapshot settings_request_id
 
     # 初始化基线，避免容器启动后首次轮询被误判为“文件变更”
     if [[ -f "$SETTINGS_PUBLIC" ]]; then
-        mtime=$(stat -c %Y "$SETTINGS_PUBLIC" 2>/dev/null || stat -f %m "$SETTINGS_PUBLIC")
+        mtime=$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)
         last_settings_mtime="$mtime"
         cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"
         IFS='|' read -r enabled interval_minutes builtin_enabled <<< "$(read_settings)"
         prev_builtin_enabled="$builtin_enabled"
     fi
     if [[ -f "$SUBSCRIPTIONS_PUBLIC" ]]; then
-        subs_mtime=$(stat -c %Y "$SUBSCRIPTIONS_PUBLIC" 2>/dev/null || stat -f %m "$SUBSCRIPTIONS_PUBLIC")
+        subs_mtime=$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)
         last_subs_mtime="$subs_mtime"
-        cp "$SUBSCRIPTIONS_PUBLIC" "$SUBSCRIPTIONS_FILE"
         if load_subscriptions >/dev/null 2>&1; then
             last_subs_signature=$(subscriptions_signature)
         fi
@@ -1187,35 +1189,53 @@ auto_update_loop() {
 
     while true; do
         if [[ -f "$SETTINGS_PUBLIC" ]]; then
-            mtime=$(stat -c %Y "$SETTINGS_PUBLIC" 2>/dev/null || stat -f %m "$SETTINGS_PUBLIC")
+            mtime=$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)
             if [[ "$mtime" != "$last_settings_mtime" ]]; then
+                settings_snapshot=$(mktemp "$TMP_DIR/settings.XXXXXX")
+                cp "$SETTINGS_PUBLIC" "$settings_snapshot"
+                mtime=$(sha256sum "$settings_snapshot" | cut -d' ' -f1)
                 last_settings_mtime="$mtime"
-                cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"
+                settings_request_id=$(jq -r '.requestId // empty' "$settings_snapshot" 2>/dev/null || true)
+                if ! jq -e '(.autoEnabled|type)=="boolean" and (.builtinEnabled|type)=="boolean" and
+                    (.intervalMinutes|type)=="number" and .intervalMinutes>=0 and .intervalMinutes<=10080 and
+                    (.autoEnabled==false or .intervalMinutes>=1)' "$settings_snapshot" >/dev/null 2>&1; then
+                    write_task_status "$settings_request_id" failed "更新间隔或设置格式无效"
+                    if [[ "$mtime" == "$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)" ]]; then
+                        cp "$SETTINGS_FILE" "$SETTINGS_PUBLIC"
+                    fi
+                    rm -f "$settings_snapshot"
+                    ensure_public_file_readable "$SETTINGS_PUBLIC"
+                    log "Invalid settings rejected."
+                    continue
+                fi
+                cp "$settings_snapshot" "$SETTINGS_FILE"
                 prev_builtin_enabled="$builtin_enabled"
-                IFS='|' read -r enabled interval_minutes builtin_enabled <<< "$(read_settings)"
+                IFS='|' read -r enabled interval_minutes builtin_enabled <<< "$(read_settings "$settings_snapshot")"
+                rm -f "$settings_snapshot"
                 log "Auto update settings changed: enabled=$enabled interval=${interval_minutes}m builtin=$builtin_enabled"
                 next_run=0
                 if [[ "$builtin_enabled" != "$prev_builtin_enabled" ]]; then
                     log "Built-in rule switch changed ($prev_builtin_enabled -> $builtin_enabled), applying immediately..."
-                    if update_resources "switch" "switch"; then
+                    if update_resources "switch" "switch" "$settings_request_id" "" "$mtime"; then
                         log "Built-in rule switch applied successfully."
                     else
                         log "WARNING: Failed to apply built-in rule switch immediately."
                     fi
+                else
+                    write_task_status "$settings_request_id" success "设置已保存"
                 fi
             fi
         fi
 
         if [[ -f "$SUBSCRIPTIONS_PUBLIC" ]]; then
-            subs_mtime=$(stat -c %Y "$SUBSCRIPTIONS_PUBLIC" 2>/dev/null || stat -f %m "$SUBSCRIPTIONS_PUBLIC")
+            subs_mtime=$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)
             if [[ "$subs_mtime" != "$last_subs_mtime" ]]; then
                 last_subs_mtime="$subs_mtime"
-                cp "$SUBSCRIPTIONS_PUBLIC" "$SUBSCRIPTIONS_FILE"
                 if load_subscriptions; then
                     log "Subscriptions updated: active=${ACTIVE_SUB_INDEX:-0} total=${#SUBS_URLS_ARRAY[@]}"
                     current_subs_signature=$(subscriptions_signature)
                     if [[ "$current_subs_signature" != "$last_subs_signature" ]]; then
-                        if update_resources "switch" "switch"; then
+                        if update_resources "switch" "switch" "$SUBS_REQUEST_ID" "$SUBS_SOURCE_HASH"; then
                             next_run=0
                             if load_subscriptions >/dev/null 2>&1; then
                                 last_subs_signature=$(subscriptions_signature)
@@ -1225,9 +1245,19 @@ auto_update_loop() {
                         else
                             log "WARNING: Failed to apply subscription switch."
                         fi
+                    else
+                        if [[ "$SUBS_SOURCE_HASH" == "$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)" ]]; then
+                            write_subscriptions_state "$SUBSCRIPTIONS_FILE" || true
+                            write_task_status "$SUBS_REQUEST_ID" success "订阅已保存"
+                        fi
                     fi
                 else
-                    log "Subscriptions file updated but empty."
+                    write_task_status "$SUBS_REQUEST_ID" failed "订阅列表无效，已保留原设置"
+                    if [[ "$SUBS_SOURCE_HASH" == "$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)" ]]; then
+                        cp "$SUBSCRIPTIONS_FILE" "$SUBSCRIPTIONS_PUBLIC"
+                    fi
+                    ensure_public_file_readable "$SUBSCRIPTIONS_PUBLIC"
+                    log "Invalid subscription list rejected."
                 fi
             fi
         fi
@@ -1243,7 +1273,7 @@ auto_update_loop() {
                     next_run=$((now + interval_sec))
                 fi
                 if [[ "$now" -ge "$next_run" ]]; then
-                    update_resources "update" "all"
+                    update_resources "update" "all" || log "Scheduled update failed; worker continues."
                     next_run=$((now + interval_sec))
                 fi
             fi
@@ -1256,17 +1286,20 @@ auto_update_loop() {
 # ========= 函数：启动快捷入口页面 =========
 start_portal() {
     ensure_secret
+    ensure_portal_admin_key
+    mkdir -p "$PORTAL_TASK_DIR" "$PORTAL_REQUEST_DIR"/{updates,validations,latency-browser,latency-router}
+    chown -R www-data:www-data "$PORTAL_TASK_DIR" "$PORTAL_REQUEST_DIR"
     if [[ ! -f "$PORTAL_CONF_TEMPLATE" ]]; then
         cp "$PORTAL_CONF" "$PORTAL_CONF_TEMPLATE"
     fi
     cp "$PORTAL_CONF_TEMPLATE" "$PORTAL_CONF"
     if [[ -n "$PORTAL_ADMIN_KEY" ]]; then
         if command -v openssl >/dev/null 2>&1; then
-            printf 'admin:%s\n' "$(openssl passwd -apr1 "$PORTAL_ADMIN_KEY")" > "$PORTAL_AUTH_FILE"
+            printf 'admin:%s\n' "$(printf '%s\n' "$PORTAL_ADMIN_KEY" | openssl passwd -apr1 -stdin)" > "$PORTAL_AUTH_FILE"
             sed -i "s|__PORTAL_AUTH__|auth_basic \"Portal Admin\"; auth_basic_user_file $PORTAL_AUTH_FILE;|g" "$PORTAL_CONF"
         else
-            log "WARNING: openssl not found. Portal admin auth disabled."
-            sed -i "s|__PORTAL_AUTH__||g" "$PORTAL_CONF"
+            log "ERROR: openssl missing; cannot enable Portal authentication."
+            return 1
         fi
     else
         sed -i "s|__PORTAL_AUTH__||g" "$PORTAL_CONF"
@@ -1302,43 +1335,24 @@ start_portal() {
     nginx
 }
 
-# ========= 函数：修正端口与字段 =========
-apply_config_fixes() {
-    local FILE=$1
-    log "Applying port fixes and defaults to $FILE..."
-
-    # 端口修正
-    sed -i "s/^mixed-port:.*/mixed-port: $CLASH_MIXED_PORT/" "$FILE"
-    sed -i "s/^socks-port:.*/socks-port: $CLASH_SOCKS_PORT/" "$FILE"
-    sed -i "s/^tproxy-port:.*/tproxy-port: $CLASH_TPROXY_PORT/" "$FILE"
-    sed -i "s/^port:.*/port: $CLASH_HTTP_PORT/" "$FILE"
-    sed -i "s|^[[:space:]]*#\\{0,1\\}[[:space:]]*external-ui:.*|external-ui: /opt/ui|" "$FILE"
-    sed -i "s/^external-controller:.*/external-controller: 0.0.0.0:$DASH_PORT/" "$FILE"
-    sed -i "s|^[[:space:]]*#\\{0,1\\}[[:space:]]*allow-lan:.*|allow-lan: true|" "$FILE"
-
-    # 缺失字段兜底
-    grep -q "mixed-port:" "$FILE" || echo "mixed-port: $CLASH_MIXED_PORT" >> "$FILE"
-    grep -q "socks-port:" "$FILE" || echo "socks-port: $CLASH_SOCKS_PORT" >> "$FILE"
-    grep -q "tproxy-port:" "$FILE" || echo "tproxy-port: $CLASH_TPROXY_PORT" >> "$FILE"
-    grep -q "^port:" "$FILE" || echo "port: $CLASH_HTTP_PORT" >> "$FILE"
-    grep -q "^[[:space:]]*external-ui:" "$FILE" || echo "external-ui: /opt/ui" >> "$FILE"
-    grep -q "external-controller:" "$FILE" || echo "external-controller: 0.0.0.0:$DASH_PORT" >> "$FILE"
-    grep -q "^[[:space:]]*allow-lan:" "$FILE" || echo "allow-lan: true" >> "$FILE"
-
-    # Secret 处理
-    if [[ -n "$CLASH_SECRET" ]]; then
-        grep -q "^secret:" "$FILE" && \
-            sed -i "s/^secret:.*/secret: \"$CLASH_SECRET\"/" "$FILE" || \
-            echo "secret: \"$CLASH_SECRET\"" >> "$FILE"
-    fi
+# ========= 函数：任务状态与配置应用 =========
+write_task_status() {
+    local request_id="$1" state="$2" message="$3"
+    [[ "$request_id" =~ ^[A-Za-z0-9-]{1,80}$ ]] || return 0
+    local target="$PORTAL_TASK_DIR/$request_id.json"
+    jq -n --arg requestId "$request_id" --arg state "$state" --arg message "$message" \
+        '{requestId:$requestId,state:$state,message:$message}' > "$target.tmp"
+    mv "$target.tmp" "$target"
+    ensure_public_file_readable "$target"
 }
 
 validate_generated_config() {
     local output
     local retry=0
+    local candidate="${1:-$CONFIG_FILE}"
 
     while true; do
-        if output=$(SAFE_PATHS="/opt/ui${SAFE_PATHS:+:$SAFE_PATHS}" clash -d "$CONFIG_DIR" -f "$CONFIG_FILE" -t 2>&1); then
+        if output=$(SAFE_PATHS="/opt/ui${SAFE_PATHS:+:$SAFE_PATHS}" timeout "$CONFIG_VALIDATE_MAX_TIME" clash -d "$CONFIG_DIR" -f "$candidate" -t 2>&1); then
             log "Config validation passed."
             return 0
         fi
@@ -1355,7 +1369,6 @@ validate_generated_config() {
         if [[ "$retry" -lt "$CONFIG_TEST_MAX_RETRY" ]] && printf '%s' "$output" | grep -Eqi 'GeoSite|geosite'; then
             retry=$((retry + 1))
             log "GeoSite issue detected. Force refreshing GeoSite.dat (retry=$retry)..."
-            rm -f "$GEOSITE_FILE"
             if download_with_fallback "$GEOSITE_FILE" "GeoSite.dat" \
                 "$GEOSITE_URL" \
                 "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/release/geosite.dat" \
@@ -1368,57 +1381,34 @@ validate_generated_config() {
     done
 }
 
-restart_clash_via_api() {
-    local HTTP_CODE
-    local API_URL="http://127.0.0.1:${DASH_PORT}/restart"
-    local AUTH_HEADER="Authorization: Bearer ${CLASH_SECRET}"
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL" \
-        -H "Content-Type: application/json" \
-        -H "$AUTH_HEADER" \
-        -d '{"path":"","payload":""}')
-    if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "204" ]]; then
-        log "Clash restart trigger success (HTTP $HTTP_CODE)."
-    else
-        log "ERROR: Clash restart trigger failed (HTTP $HTTP_CODE)."
-    fi
+reload_clash_via_api() {
+    local code
+    # Hot reload keeps the core and the Portal workers alive.
+    code=$(curl -sS --connect-timeout 5 --max-time 90 -o /dev/null -w '%{http_code}' \
+        -X PUT "http://127.0.0.1:${DASH_PORT}/configs?force=true" \
+        -H 'Content-Type: application/json' -H "Authorization: Bearer $CLASH_SECRET" \
+        -d '{"path":"","payload":""}') || return 1
+    [[ "$code" == "200" || "$code" == "204" ]] || { log "Config reload failed (HTTP $code)."; return 1; }
 }
 
-apply_active_subscription_from_cache() {
-    local mode="$1"
-    local builtin_enabled="$2"
-    local active_index="${ACTIVE_SUB_INDEX:-0}"
-    local cache_file
-
-    if [[ "$active_index" -lt 0 || "$active_index" -ge "${#SUBS_URLS_ARRAY[@]}" ]]; then
-        active_index=0
-    fi
-
-    cache_file=$(subscription_cache_file_by_index "$active_index") || return 1
-    if [[ ! -s "$cache_file" ]]; then
-        log "WARNING: Active subscription cache missing: $cache_file"
-        return 1
-    fi
-
-    if [[ "$builtin_enabled" == "true" ]]; then
-        if ! build_config_from_builtin "$cache_file" "$CONFIG_FILE"; then
-            return 1
+restore_applied_selection() {
+    [[ -s "$APPLIED_STATE_FILE" ]] || return 0
+    local applied_url old_builtin idx
+    applied_url=$(jq -r '.url' "$APPLIED_STATE_FILE")
+    old_builtin=$(jq -r '.builtinEnabled' "$APPLIED_STATE_FILE")
+    for idx in "${!SUBS_URLS_ARRAY[@]}"; do
+        if [[ "${SUBS_URLS_ARRAY[$idx]}" == "$applied_url" ]]; then
+            ACTIVE_SUB_INDEX="$idx"
+            write_subscriptions_state "$SUBSCRIPTIONS_FILE" || true
+            break
         fi
-    else
-        cp "$cache_file" "$CONFIG_FILE"
+    done
+    if [[ -s "$SETTINGS_PUBLIC" && "${settings_signature:-}" == "$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)" ]]; then
+        jq --argjson builtin "$old_builtin" '.builtinEnabled=$builtin | del(.requestId)' "$SETTINGS_PUBLIC" > "$SETTINGS_PUBLIC.tmp"
+        mv "$SETTINGS_PUBLIC.tmp" "$SETTINGS_PUBLIC"
+        ensure_public_file_readable "$SETTINGS_PUBLIC"
+        cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"
     fi
-
-    apply_config_fixes "$CONFIG_FILE"
-    if ! validate_generated_config; then
-        return 1
-    fi
-    write_portal_status
-    CURRENT_ACTIVE_INDEX="$active_index"
-    log "Configuration switched from local cache successfully."
-
-    if [[ "$mode" == "update" || "$mode" == "switch" ]]; then
-        restart_clash_via_api
-    fi
-    return 0
 }
 
 update_geodata_resources() {
@@ -1430,13 +1420,13 @@ update_geodata_resources() {
         first_start=1
     fi
 
+    seed_geodata_from_image
     if ! is_geodata_auto_update_enabled; then
         log "GEODATA_AUTO_UPDATE disabled. Skip geodata prefetch."
         touch "$FIRST_START_MARKER" 2>/dev/null || true
         return 0
     fi
 
-    seed_geodata_from_image
     log "Preparing geodata resources at container startup..."
     if ! download_if_stale "$MMDB_FILE" "$mmdb_max_age" "Country.mmdb" \
         "$MMDB_URL" \
@@ -1471,176 +1461,143 @@ update_geodata_resources() {
 # ========= 函数：执行更新任务 =========
 # 参数 $1: MODE -> initial | update | switch
 # 参数 $2: DOWNLOAD_SCOPE -> active | all | switch
-update_resources() {
-    local MODE="${1:-update}"
-    local DOWNLOAD_SCOPE="${2:-active}"
-    local lock_fd=200
-    local builtin_enabled="true"
-    local active_index=0
-    local idx
-    local now_shanghai
+update_resources() (
+    local mode="${1:-update}" scope="${2:-active}" request_id="${3:-}" expected_subs="${4:-}" expected_settings="${5:-}"
+    local lock_fd stage active cache candidate builtin idx header downloaded=false failures=0 subs_signature settings_signature
     local -a targets=()
-    local curl_code=0
-    local cache_file=""
-    local header_file=""
-    local active_download_ok="false"
-    local subs_state_dirty="false"
-    local active_error=""
-    local switch_missing_cache="false"
-    local rollback_index=""
-
     exec {lock_fd}>/tmp/clash_update.lock
     flock "$lock_fd"
-    trap 'flock -u "$lock_fd"; exec {lock_fd}>&-' RETURN
-
-    log "Starting resource update (mode=$MODE, scope=$DOWNLOAD_SCOPE)..."
-
-    if ! load_subscriptions; then
-        log "No subscriptions configured. Skipping update."
-        return 0
-    fi
-    IFS='|' read -r _ _ builtin_enabled <<< "$(read_settings)"
-
-    if [[ -f "$CONFIG_FILE" ]]; then
-        cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
-    fi
-    if [[ -f "$MMDB_FILE" ]]; then
-        cp "$MMDB_FILE" "$MMDB_FILE.bak"
-    fi
-
-    active_index="${ACTIVE_SUB_INDEX:-0}"
-    if [[ "$active_index" -lt 0 || "$active_index" -ge "${#SUBS_URLS_ARRAY[@]}" ]]; then
-        active_index=0
-    fi
-
-    # 切换模式下默认不下载；若目标订阅本地缓存不存在，则尝试下载一次以生成缓存。
-    if [[ "$MODE" == "switch" && "$DOWNLOAD_SCOPE" == "switch" ]]; then
-        cache_file=$(subscription_cache_file_by_index "$active_index" 2>/dev/null || true)
-        if [[ ! -s "$cache_file" ]]; then
-            switch_missing_cache="true"
-            if [[ "$CURRENT_ACTIVE_INDEX" -ge 0 && "$CURRENT_ACTIVE_INDEX" -lt "${#SUBS_URLS_ARRAY[@]}" ]]; then
-                local rollback_cache
-                rollback_cache=$(subscription_cache_file_by_index "$CURRENT_ACTIVE_INDEX" 2>/dev/null || true)
-                if [[ -s "$rollback_cache" ]]; then
-                    rollback_index="$CURRENT_ACTIVE_INDEX"
-                fi
-            fi
-            log "WARNING: Active subscription cache missing: $cache_file"
-            log "Attempting to download active subscription once to build local cache."
-            DOWNLOAD_SCOPE="active"
+    stage=$(mktemp -d "$CONFIG_DIR/.update.XXXXXX") || return 1
+    trap '
+        result=$?
+        if [[ "$result" -ne 0 && "$request_id" =~ ^[A-Za-z0-9-]{1,80}$ ]] &&
+           jq -e ".state==\"running\"" "$PORTAL_TASK_DIR/$request_id.json" >/dev/null 2>&1; then
+            write_task_status "$request_id" failed "更新未完成，请检查容器日志"
         fi
+        rm -rf "$stage"
+    ' EXIT
+    write_task_status "$request_id" running "正在下载并校验配置"
+    if ! load_subscriptions "" "$stage/input-subs.json"; then
+        write_task_status "$request_id" failed "没有可用订阅"
+        return 1
     fi
-
-    if [[ "$DOWNLOAD_SCOPE" == "all" ]]; then
-        for idx in "${!SUBS_URLS_ARRAY[@]}"; do
-            targets+=("$idx")
-        done
-    elif [[ "$DOWNLOAD_SCOPE" == "active" ]]; then
-        targets+=("$active_index")
+    IFS='|' read -r _ _ builtin <<< "$(read_settings)"
+    subs_signature="$SUBS_SOURCE_HASH"
+    settings_signature=$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)
+    if [[ ( -n "$expected_subs" && "$expected_subs" != "$subs_signature" ) || ( -n "$expected_settings" && "$expected_settings" != "$settings_signature" ) ]]; then
+        write_task_status "$request_id" failed "设置已发生变化，请重试"
+        return 1
     fi
-
+    active="${ACTIVE_SUB_INDEX:-0}"
+    cache=$(subscription_cache_file_by_index "$active")
+    if [[ "$scope" == "all" ]]; then
+        targets=("${!SUBS_URLS_ARRAY[@]}")
+    elif [[ "$scope" != "switch" || ! -s "$cache" ]]; then
+        targets=("$active")
+    fi
     for idx in "${targets[@]}"; do
-        curl_code=0
-        cache_file=$(subscription_cache_file_by_index "$idx") || continue
-        header_file="$TMP_DIR/sub${idx}.headers"
-        rm -f "$header_file" "${cache_file}.tmp"
-        log "Downloading subscription $idx..."
-
-        if curl_subscription "${SUBS_URLS_ARRAY[$idx]}" "$header_file" "${cache_file}.tmp" "$SUBSCR_DOWNLOAD_MAX_TIME"; then
-            :
-        else
-            curl_code=$?
-        fi
-
-        if [[ -s "${cache_file}.tmp" ]]; then
-            mv "${cache_file}.tmp" "$cache_file"
-            now_shanghai=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
-            SUBS_UPDATED_ARRAY[$idx]="$now_shanghai"
-            SUBS_ERRORS_ARRAY[$idx]=""
-            SUBS_NAMES_ARRAY[$idx]=$(derive_subscription_name "${SUBS_URLS_ARRAY[$idx]}" "$header_file")
-            update_subscription_info_from_header "$header_file" "$idx" "false"
-            subs_state_dirty="true"
-            if [[ "$idx" -eq "$active_index" ]]; then
-                active_download_ok="true"
+        header="$stage/$idx.headers"
+        if curl_subscription "${SUBS_URLS_ARRAY[$idx]}" "$header" "$stage/$idx.sub" "$SUBSCR_DOWNLOAD_MAX_TIME" && [[ -s "$stage/$idx.sub" ]]; then
+            if generate_config "$stage/$idx.sub" "$stage/$idx.yaml" "$builtin" && validate_generated_config "$stage/$idx.yaml"; then
+                SUBS_UPDATED_ARRAY[$idx]=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
+                SUBS_ERRORS_ARRAY[$idx]=""
+                SUBS_NAMES_ARRAY[$idx]=$(derive_subscription_name "${SUBS_URLS_ARRAY[$idx]}" "$header")
+                update_subscription_info_from_header "$header" "$idx" false
+                [[ "$idx" != "$active" ]] || downloaded=true
+                continue
             fi
+            SUBS_ERRORS_ARRAY[$idx]="订阅配置无效，已保留上一次可用缓存"
         else
-            rm -f "${cache_file}.tmp"
-            SUBS_ERRORS_ARRAY[$idx]="下载失败（curl=${curl_code:-1}）"
-            cache_subscription_info_unknown_for_index "$idx" "subscription download failed (curl=${curl_code:-1})"
-            log "WARNING: Failed to download subscription $idx (curl=${curl_code:-1})"
-            subs_state_dirty="true"
-            if [[ "$idx" -eq "$active_index" ]]; then
-                active_error="当前订阅下载失败（索引 ${active_index}，curl=${curl_code:-1}）。"
-            fi
+            SUBS_ERRORS_ARRAY[$idx]="下载失败，已保留上一次可用缓存"
         fi
+        rm -f "$stage/$idx.sub" "$stage/$idx.yaml"
+        failures=$((failures + 1))
     done
-
-    if [[ "$DOWNLOAD_SCOPE" != "switch" && "$subs_state_dirty" == "true" ]]; then
+    if [[ "$subs_signature" != "$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)" || "$settings_signature" != "$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)" ]]; then
+        write_task_status "$request_id" failed "下载期间设置发生变化，请重试更新"
+        return 1
+    fi
+    # A failed active download is an error, even when the previous cache exists.
+    # At startup the previous cache can still start the service while offline.
+    if [[ "$mode" != "initial" && ( "$scope" != "switch" || ! -s "$cache" ) && "$downloaded" != "true" ]]; then
+        local active_error="${SUBS_ERRORS_ARRAY[$active]:-当前订阅更新失败}"
+        load_subscriptions "$stage/input-subs.json" || true
+        SUBS_ERRORS_ARRAY[$active]="$active_error"
         write_subscriptions_state "$SUBSCRIPTIONS_FILE"
+        [[ "$mode" != "switch" ]] || restore_applied_selection
+        write_task_status "$request_id" failed "当前订阅下载或校验失败，已保留原配置"
+        return 1
     fi
-
-    if [[ "$switch_missing_cache" == "true" && "$active_download_ok" != "true" ]]; then
-        if [[ -n "$rollback_index" ]]; then
-            ACTIVE_SUB_INDEX="$rollback_index"
-            active_index="$rollback_index"
-            active_error=""
-            write_subscriptions_state "$SUBSCRIPTIONS_FILE"
-            write_subscription_info_from_cache_index "$active_index" || true
-            log "Switch aborted: cache missing for target subscription, reverted active to $active_index."
+    candidate="$stage/candidate.yaml"
+    local source="$cache"
+    [[ ! -s "$stage/$active.sub" ]] || source="$stage/$active.sub"
+    if ! generate_config "$source" "$candidate" "$builtin" || ! validate_generated_config "$candidate"; then
+        restore_applied_selection
+        write_task_status "$request_id" failed "配置校验失败，已恢复原选择和配置"
+        return 1
+    fi
+    if [[ "$subs_signature" != "$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)" || "$settings_signature" != "$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)" ]]; then
+        write_task_status "$request_id" failed "校验期间设置发生变化，请重试"
+        return 1
+    fi
+    if [[ -f "$CONFIG_FILE" ]]; then cp "$CONFIG_FILE" "$stage/previous.yaml" || return 1; fi
+    cp "$candidate" "$CONFIG_FILE.new" || return 1
+    mv "$CONFIG_FILE.new" "$CONFIG_FILE" || return 1
+    if [[ "$mode" != "initial" ]] && ! reload_clash_via_api; then
+        if [[ -f "$stage/previous.yaml" ]]; then
+            mv "$stage/previous.yaml" "$CONFIG_FILE"
+            reload_clash_via_api || log "WARNING: Failed to reload previous configuration."
+        else
+            rm -f "$CONFIG_FILE"
         fi
+        load_subscriptions "$stage/input-subs.json" || true
+        SUBS_ERRORS_ARRAY[$active]="配置应用失败，已保留原缓存"
+        restore_applied_selection
+        write_task_status "$request_id" failed "配置应用失败，已恢复原配置"
+        return 1
     fi
-
-    if [[ "$DOWNLOAD_SCOPE" != "switch" && "$active_download_ok" != "true" && -n "$active_error" ]]; then
-        cache_subscription_info_unknown_for_index "$active_index" "$active_error"
+    for idx in "${targets[@]}"; do
+        [[ -s "$stage/$idx.sub" ]] || continue
+        mv "$stage/$idx.sub" "$(subscription_cache_file_by_index "$idx")"
+    done
+    cp "$cache" "$DEBUG_RAW_CONFIG"
+    jq -n --arg url "${SUBS_URLS_ARRAY[$active]}" --argjson builtin "$builtin" \
+        '{url:$url,builtinEnabled:$builtin}' > "$APPLIED_STATE_FILE.tmp"
+    mv "$APPLIED_STATE_FILE.tmp" "$APPLIED_STATE_FILE"
+    write_subscriptions_state "$SUBSCRIPTIONS_FILE"
+    if [[ "$settings_signature" == "$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)" ]]; then
+        cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"
     fi
-    write_subscription_info_from_cache_index "$active_index" || write_subscription_info_unknown "$active_error"
-
-    if apply_active_subscription_from_cache "$MODE" "$builtin_enabled"; then
-        cache_file=$(subscription_cache_file_by_index "$active_index" 2>/dev/null || true)
-        if [[ -n "$cache_file" && -f "$cache_file" ]]; then
-            cp "$cache_file" "$DEBUG_RAW_CONFIG" 2>/dev/null || true
-        fi
-        rm -f "$CONFIG_FILE.bak" "$MMDB_FILE.bak" "$MMDB_FILE.tmp"
-        return 0
-    fi
-
-    log "CRITICAL: Update/switch failed."
-    if [[ -f "$CONFIG_FILE.bak" || -f "$MMDB_FILE.bak" ]]; then
-        log "Restoring from backups..."
-        if [[ -f "$CONFIG_FILE.bak" ]]; then
-            mv "$CONFIG_FILE.bak" "$CONFIG_FILE"
-        fi
-        if [[ -f "$MMDB_FILE.bak" ]]; then
-            mv "$MMDB_FILE.bak" "$MMDB_FILE"
-        fi
-    fi
-    if [[ "$MODE" == "initial" ]]; then
-        log "Initial startup failed due to missing/invalid local subscription cache. Exiting."
-        exit 1
-    fi
-    return 1
-}
+    write_subscription_info_from_cache_index "$active" || true
+    write_portal_status
+    local message="配置已成功应用"
+    [[ "$failures" -eq 0 ]] || message="配置已应用，部分订阅更新失败，保留原缓存"
+    write_task_status "$request_id" success "$message"
+    log "$message"
+)
 
 # ========= 主逻辑 =========
 
 # 0. 启动快捷入口页面
+validate_environment
+rm -f /tmp/portal-core-started /tmp/portal-auto-worker.pid
 init_subscriptions
 start_portal
-if [[ ! -f "$PORTAL_STATUS_FILE" ]]; then
-    write_portal_status
-fi
-watch_portal_update &
 update_geodata_resources
+watch_portal_update &
+echo "$!" > /tmp/portal-worker.pid
 
 # 1. 首次运行：等待订阅，然后执行更新和配置生成
 wait_for_subscriptions
-update_resources "initial"
+update_resources "initial" active "$(jq -r '.requestId // empty' "$SUBSCRIPTIONS_PUBLIC")"
 
 # 2. 启动后台自动更新循环
 auto_update_loop &
+echo "$!" > /tmp/portal-auto-worker.pid
 
 # 3. 启动 mihomo (前台运行)
 # 使用 exec 替换当前 shell 进程，让 clash 成为 PID 1 (或继承 PID)
 log "Starting clash (mihomo) in foreground..."
 export SAFE_PATHS="/opt/ui"
+touch /tmp/portal-core-started
 exec clash -d "$CONFIG_DIR"

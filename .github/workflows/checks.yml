@@ -1,0 +1,30 @@
+name: Runtime checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Syntax and workflow checks
+        run: |
+          for script in entrypoint.sh scripts/*.sh; do bash -n "$script"; done
+          node tests/check_frontend.cjs
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.dev.yml config -q
+          docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:latest
+      - name: Build runtime image
+        run: docker build -t clash-meta-review:local .
+      - name: Configuration tests
+        run: docker run --rm --entrypoint python3 -v "$PWD:/src:ro" -w /src clash-meta-review:local -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Runtime regression tests
+        run: python3 -u tests/integration.py

@@ -5,3 +5,8 @@ data/
 
 # 本地内核不传入构建上下文
 core/clash-linux-*
+
+.env
+__pycache__/
+**/__pycache__/
+*.pyc

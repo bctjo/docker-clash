@@ -13,7 +13,7 @@ proxy-providers:
 proxies:
   - {name: 直连, type: direct}
 
-# 全局配置 
+# 全局配置
 port: 7890
 socks-port: 7891
 tproxy-port: 7892
@@ -72,9 +72,9 @@ dns:
       - 119.29.29.29
   fake-ip-filter:
     - "rule-set:private_domain,cn_domain,apple_domain"
- 
+
 proxy-groups:
-  - {name: 🚀 默认代理, type: select, proxies: [🇭🇰 香港自动, 🇨🇳 台湾自动, 🇯🇵 日本自动, 🇸🇬 新加坡自动, 🇺🇲 美国自动, ⚡ 自动选择, 🌐 手动切换, 直连]}
+  - {name: 🚀 默认代理, type: select, proxies: [⚡ 自动选择, 🇭🇰 香港自动, 🇨🇳 台湾自动, 🇯🇵 日本自动, 🇸🇬 新加坡自动, 🇺🇲 美国自动, 🌐 手动切换, 直连]}
   - {name: ⚡ 自动选择, type: url-test, include-all: true, tolerance: 20, interval: 300, filter: "^((?!(直连)).)*$"}
   - {name: 🌐 手动切换, type: select, include-all: true}
   - {name: 🎥 YouTube, type: select, proxies: [🚀 默认代理, 🇭🇰 香港自动, 🇨🇳 台湾自动, 🇯🇵 日本自动, 🇸🇬 新加坡自动, 🇺🇲 美国自动, ⚡ 自动选择, 🌐 手动切换, 直连]}
@@ -126,7 +126,7 @@ rule-anchor:
   ip: &ip {type: http, interval: 86400, behavior: ipcidr, format: mrs}
   domain: &domain {type: http, interval: 86400, behavior: domain, format: mrs}
   class: &class {type: http, interval: 86400, behavior: classical, format: text}
-rule-providers: 
+rule-providers:
   private_domain: { <<: *domain, url: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/private.mrs"}
   proxylite: { <<: *class, url: "https://raw.githubusercontent.com/zhnglab/openclash/refs/heads/main/proxy.list"}
   directlite: { <<: *class, url: "https://raw.githubusercontent.com/zhnglab/openclash/refs/heads/main/direct.list"}
@@ -146,7 +146,7 @@ rule-providers:
   geolocation-!cn: { <<: *domain, url: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/geolocation-!cn.mrs"}
   cn_domain: { <<: *domain, url: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs"}
   Whatsapp: { <<: *class, url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Whatsapp/Whatsapp.list"}
-  Facebook: { <<: *class, url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Facebook/Facebook.list"}  
+  Facebook: { <<: *class, url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Facebook/Facebook.list"}
   SteamCN: { <<: *class, url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/SteamCN/SteamCN.list"}
   private_ip: {<<: *ip, url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/private.mrs"}
   cn_ip: { <<: *ip, url: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/cn.mrs"}

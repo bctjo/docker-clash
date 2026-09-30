@@ -574,7 +574,7 @@
                 </label>
                 <label className="auto-field inline-flex items-center gap-2">
                   自动更新间隔
-                  <input id="auto-minutes" type="number" min="0" step="0.5" className="w-24 text-center" />
+                  <input id="auto-minutes" type="number" min="1" max="10080" step="0.5" className="w-24 text-center" />
                   分钟
                 </label>
               </div>
@@ -700,7 +700,7 @@
       const socksPort = config.socksPort || '7891';
       const tproxyPort = config.tproxyPort || '7892';
       const mixedPort = config.mixedPort || '7893';
-      const secret = config.secret || '';
+      let secret = '';
       const updateIntervalSec = Number(config.updateIntervalSec || '0');
       const adminAuthEnabled = config.adminAuthEnabled === true;
       const adminStorageKey = 'portalAdminKey';
@@ -711,6 +711,7 @@
       const info = document.getElementById('info');
       const hostPort = `${host}:${dashPort}`;
 
+      const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
       const fillConnectionInfo = () => {
         const rows = [
           { label: '控制地址', value: `${protocol}://${hostPort}` },
@@ -722,7 +723,7 @@
         ];
 
         info.innerHTML = rows
-          .map((item) => `<div class="kv"><span>${item.label}</span><strong>${item.value}</strong></div>`)
+          .map((item) => `<div class="kv"><span>${item.label}</span><strong>${escapeHtml(item.value)}</strong></div>`)
           .join('');
 
         const baseQuery = new URLSearchParams({
@@ -813,7 +814,7 @@
 
       const applyLatencyModeUI = () => {
         latencyModeIcon.innerHTML = latencyMode === 'router' ? routerModeSvg : browserModeSvg;
-        latencyModeBtn.title = latencyMode === 'router' ? '当前：路由器检测（节点）' : '当前：浏览器检测（本地）';
+        latencyModeBtn.title = latencyMode === 'router' ? '当前：代理规则检测' : '当前：容器直连检测';
       };
 
       const latencyLogoSvg = (key) => {
@@ -843,14 +844,14 @@
           const latencyText = pending ? '检测中' : (hasLatency ? `${latency} ms` : (reachable === false ? '超时' : '检测中'));
           const statusColor = pending
             ? '#94a3b8'
-            : (hasLatency || reachable === true ? '#16a34a' : (reachable === false ? '#ef4444' : '#94a3b8'));
+            : (reachable === true ? '#16a34a' : (reachable === false ? '#ef4444' : '#94a3b8'));
           const logo = latencyLogoSvg(site.key);
           return `
             <div class="latency-card">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
                 <span style="display:flex;align-items:center;gap:8px;min-width:0;">
                   <span class="latency-logo">${logo}</span>
-                  <span style="font-size:0.9rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${site.name || '-'}</span>
+                  <span style="font-size:0.9rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(site.name || '-')}</span>
                 </span>
                 <span style="font-family:'JetBrains Mono','SFMono-Regular',Menlo,monospace;font-size:0.85rem;font-weight:650;color:${statusColor};">${latencyText}</span>
               </div>
@@ -862,7 +863,7 @@
         if (!adminAuthEnabled) return {};
         const key = sessionStorage.getItem(adminStorageKey);
         if (!key) return {};
-        const token = btoa(`admin:${key}`);
+        const token = btoa(String.fromCharCode(...new TextEncoder().encode(`admin:${key}`)));
         return { Authorization: `Basic ${token}` };
       };
 
@@ -907,8 +908,8 @@
       };
 
       const submitAdminKey = () => {
-        const key = adminKeyInput.value.trim();
-        if (!key) {
+        const key = adminKeyInput.value;
+        if (!key.trim()) {
           adminError.textContent = '请输入管理密钥。';
           adminError.style.display = 'block';
           return;
@@ -964,7 +965,8 @@
       const parseDateTime = (value) => {
         if (!value) return null;
         const raw = String(value).trim();
-        const parsed = new Date(raw.replace(' ', 'T'));
+        const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw) ? `${raw.replace(' ', 'T')}+08:00` : raw;
+        const parsed = new Date(normalized);
         if (!Number.isNaN(parsed.getTime())) {
           return parsed.getTime();
         }
@@ -995,17 +997,8 @@
       };
 
       const fetchStatus = async () => {
-        if (lastUpdateLocked) return;
-        if (lastSubscriptionsSnapshot.loaded && lastSubscriptionsSnapshot.entries.length) {
-          applyLastUpdateFromSubscriptions(
-            lastSubscriptionsSnapshot.entries,
-            lastSubscriptionsSnapshot.active,
-            true
-          );
-          if (lastUpdateLocked) return;
-        }
         try {
-          const res = await fetch(`/status.json?t=${Date.now()}`, { cache: 'no-store' });
+          const res = await fetchWithAuth(`/status.json?t=${Date.now()}`, { cache: 'no-store' });
           if (!res.ok) throw new Error('status');
           const data = await res.json();
           if (data.lastUpdateShanghai) {
@@ -1116,7 +1109,7 @@
           return false;
         }
         try {
-          const res = await fetch(`/subscription-info.json?t=${Date.now()}`, { cache: 'no-store' });
+          const res = await fetchWithAuth(`/subscription-info.json?t=${Date.now()}`, { cache: 'no-store' });
           if (!res.ok) throw new Error('subscription-info');
           const data = await res.json();
           return renderSubscriptionInfo(data);
@@ -1170,12 +1163,14 @@
         }
       };
 
-      const fetchLatency = async (mode = latencyMode) => {
-        const jsonPath = mode === 'router' ? '/latency-router.json' : '/latency-browser.json';
+      const fetchLatency = async (mode = latencyMode, expectedRequestId = '') => {
+        const jsonPath = expectedRequestId ? `/tasks/${expectedRequestId}.json` : (mode === 'router' ? '/latency-router.json' : '/latency-browser.json');
         try {
-          const res = await fetch(`${jsonPath}?t=${Date.now()}`, { cache: 'no-store' });
+          const res = await fetchWithAuth(`${jsonPath}?t=${Date.now()}`, { cache: 'no-store' });
           if (!res.ok) throw new Error('latency');
           const data = await res.json();
+          if (expectedRequestId && data.requestId !== expectedRequestId) return null;
+          if (data.state === 'failed') { refreshLatencyBtn.title = data.message; }
           const sites = Array.isArray(data.sites) ? data.sites : [];
           if (sites.length) {
             latencyCache[mode] = sites;
@@ -1192,35 +1187,47 @@
         }
       };
 
+      const waitForTask = async (requestId, onProgress = () => {}) => {
+        const deadline = Date.now() + 600000;
+        while (Date.now() < deadline) {
+          await sleep(1000);
+          const result = await fetchWithAuth(`/tasks/${requestId}.json?t=${Date.now()}`, { cache: 'no-store' }, false);
+          if (!result.ok) continue;
+          const task = await result.json();
+          if (task.requestId !== requestId) continue;
+          onProgress(task.message || '后台处理中');
+          if (task.state === 'failed') throw new Error(task.message);
+          if (task.state === 'success') return task;
+        }
+        throw new Error('等待后台处理超时，请查看容器日志');
+      };
+
       const triggerUpdate = async () => {
         if (updateBtn.disabled) return;
+        const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
         updateBtn.disabled = true;
         updateBtn.style.opacity = '0.55';
-        updateBtn.title = '更新中...';
+        updateBtn.title = '等待后台处理...';
         if (updateBtnIcon) updateBtnIcon.classList.add('animate-spin');
         try {
-          const res = await fetchWithAuth('/update', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+          const res = await fetchWithAuth(`/requests/updates/${requestId}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ scope: 'active' })
           });
-          if (!res.ok) throw new Error('update');
-        } catch (err) {
-          updateBtn.disabled = false;
-          updateBtn.style.opacity = '1';
-          updateBtn.title = '更新失败';
-          if (updateBtnIcon) updateBtnIcon.classList.remove('animate-spin');
-          setTimeout(() => { updateBtn.title = '更新订阅'; }, 1200);
-          return;
-        }
-        setTimeout(async () => {
+          if (!res.ok) throw new Error('无法提交更新请求');
+          await waitForTask(requestId, (message) => { updateBtn.title = message; });
+          lastUpdateLocked = false;
+          await refreshSubscriptionsUI();
           await fetchStatus();
           await fetchSubscriptionInfo();
+        } catch (err) {
+          updateBtn.title = err.message || '更新失败';
+          lastUpdateEl.textContent = err.message || '更新失败';
+        } finally {
           updateBtn.disabled = false;
           updateBtn.style.opacity = '1';
-          updateBtn.title = '更新订阅';
           if (updateBtnIcon) updateBtnIcon.classList.remove('animate-spin');
-        }, 2500);
+        }
       };
 
       updateBtn.addEventListener('click', triggerUpdate);
@@ -1237,10 +1244,11 @@
       const triggerLatencyRefresh = async () => {
         if (latencyRefreshing || refreshLatencyBtn.disabled) return;
         const refreshMode = latencyMode;
+        const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
         latencyRefreshing = true;
         refreshLatencyBtn.disabled = true;
         try {
-          const refreshPath = refreshMode === 'router' ? '/latency-router-refresh' : '/latency-browser-refresh';
+          const refreshPath = `/requests/latency-${refreshMode}/${requestId}`;
           const res = await fetchWithAuth(refreshPath, { method: 'PUT', body: '1' });
           if (!res.ok) throw new Error('latency-refresh');
           if (refreshMode === latencyMode) {
@@ -1253,10 +1261,10 @@
           return;
         }
         let hasData = false;
-        for (let i = 0; i < 12; i += 1) {
+        for (let i = 0; i < 180; i += 1) {
           await sleep(1000);
-          const data = await fetchLatency(refreshMode);
-          if (data && Array.isArray(data.sites) && data.sites.length > 0) {
+          const data = await fetchLatency(refreshMode, requestId);
+          if (data && data.requestId === requestId) {
             hasData = true;
             break;
           }
@@ -1288,10 +1296,10 @@
         subsRequired = required;
         subsModal.classList.add('open');
         subsModal.setAttribute('aria-hidden', 'false');
-        closeSubs.style.display = subsRequired ? 'none' : '';
+        closeSubs.style.display = '';
+        closeSubs.textContent = subsRequired ? '稍后配置' : '取消';
       };
       const closeSubsModal = () => {
-        if (subsRequired) return;
         subsModal.classList.remove('open');
         subsModal.setAttribute('aria-hidden', 'true');
       };
@@ -1321,10 +1329,10 @@
         try {
           const u = new URL(String(raw || '').trim());
           const normalized = `${u.origin}${u.pathname}${u.search}${u.hash}`;
-          return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+          return normalized;
         } catch (err) {
           const fallback = String(raw || '').trim();
-          return fallback.endsWith('/') ? fallback.slice(0, -1) : fallback;
+          return fallback;
         }
       };
 
@@ -1600,7 +1608,7 @@
         const deadline = Date.now() + SUBS_VALIDATE_TIMEOUT_MS;
         while (Date.now() < deadline) {
           await sleep(SUBS_VALIDATE_POLL_INTERVAL_MS);
-          const res = await fetchWithAuth(`/subscription-validate.json?t=${Date.now()}`, { cache: 'no-store' }, false);
+          const res = await fetchWithAuth(`/tasks/${requestId}.json?t=${Date.now()}`, { cache: 'no-store' }, false);
           if (!res.ok) continue;
           const data = await res.json();
           if (data && data.requestId === requestId) {
@@ -1621,7 +1629,7 @@
           throw new Error('订阅链接必须使用 http 或 https。');
         }
         const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-        const triggerRes = await fetchWithAuth('/subscription-validate', {
+        const triggerRes = await fetchWithAuth(`/requests/validations/${requestId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ requestId, url })
@@ -1705,6 +1713,7 @@
         }
         const previousActive = subsActiveIndex;
         const payload = buildSubscriptionsPayload(subsEntries, subsActiveIndex);
+        payload.requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
         saveSubs.textContent = '保存中...';
         saveSubs.disabled = true;
         try {
@@ -1714,6 +1723,8 @@
             body: JSON.stringify(payload)
           });
           if (!res.ok) throw new Error('save');
+          saveSubs.textContent = '应用中...';
+          await waitForTask(payload.requestId);
           subsError.style.display = 'none';
           saveSubs.textContent = '已保存';
           const updated = await refreshSubscriptionsUI();
@@ -1743,7 +1754,7 @@
         } catch (err) {
           saveSubs.textContent = '保存失败';
           saveSubs.disabled = false;
-          subsError.textContent = '保存失败，请稍后重试。';
+          subsError.textContent = err.message === 'save' ? '保存失败，请稍后重试。' : err.message;
           subsError.style.display = 'block';
           setTimeout(() => { saveSubs.textContent = '保存'; }, 1200);
         }
@@ -1773,7 +1784,7 @@
 
       const loadSettings = async () => {
         let autoEnabled = true;
-        let builtinEnabled = true;
+        let builtinEnabled = false;
         let intervalMinutes = updateIntervalSec ? updateIntervalSec / 60 : 0;
         let authRequired = false;
         try {
@@ -1816,10 +1827,17 @@
 
       saveSettings.addEventListener('click', async () => {
         const payload = {
+          requestId: `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`,
           autoEnabled: Boolean(autoEnabledInput.checked),
           intervalMinutes: Number(autoMinutesInput.value || 0),
           builtinEnabled: Boolean(builtinEnabledInput.checked)
         };
+        if (payload.autoEnabled && (!Number.isFinite(payload.intervalMinutes) || payload.intervalMinutes < 1 || payload.intervalMinutes > 10080)) {
+          autoMinutesInput.setCustomValidity('更新间隔应为 1 到 10080 分钟');
+          autoMinutesInput.reportValidity();
+          return;
+        }
+        autoMinutesInput.setCustomValidity('');
         saveSettings.textContent = '保存中...';
         saveSettings.disabled = true;
         try {
@@ -1829,7 +1847,10 @@
             body: JSON.stringify(payload)
           });
           if (!res.ok) throw new Error('save');
+          saveSettings.textContent = '应用中...';
+          await waitForTask(payload.requestId);
           saveSettings.textContent = '已保存';
+          saveSettings.title = '';
           setTimeout(() => {
             saveSettings.textContent = '保存';
             saveSettings.disabled = false;
@@ -1837,6 +1858,8 @@
           }, 800);
         } catch (err) {
           saveSettings.textContent = '保存失败';
+          saveSettings.title = err.message || '保存失败';
+          await loadSettings();
           setTimeout(() => {
             saveSettings.textContent = '保存';
             saveSettings.disabled = false;
@@ -1880,6 +1903,9 @@
 
       const bootstrapPortal = async () => {
         await ensureAdminSession();
+        const connection = await fetchWithAuth(`/connection.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (!connection.ok) throw new Error('无法读取连接信息');
+        secret = (await connection.json()).secret || '';
         fillConnectionInfo();
         const data = await bootstrapSubscriptionsUI();
         if (data.loaded && !data.authRequired && !data.entries.length) {
@@ -1921,7 +1947,7 @@
         setInterval(triggerLatencyRefresh, 30000);
       };
 
-      bootstrapPortal();
+      bootstrapPortal().catch((error) => { lastUpdateEl.textContent = error.message || '初始化失败，请刷新页面'; });
     </script>
   </body>
 </html>

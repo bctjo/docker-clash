@@ -22,7 +22,7 @@ lint_bash_syntax:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   script:
     - bash -n entrypoint.sh
-    - bash -n scripts/*.sh
+    - for script in scripts/*.sh; do bash -n "$script"; done
 
 lint_compose_config:
   stage: lint

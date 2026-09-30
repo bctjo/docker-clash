@@ -3,21 +3,28 @@ FROM debian:12-slim
 ARG APP_VERSION="dev"
 ARG APP_REVISION="unknown"
 ARG APP_SOURCE="https://github.com/bctjo/docker-clash"
+LABEL org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$APP_REVISION \
+      org.opencontainers.image.source=$APP_SOURCE
 ARG TARGETARCH
 ARG MIHOMO_REPO="MetaCubeX/mihomo"
 ARG MIHOMO_VERSION=""
 
-# 切换 APT 源为 USTC（Debian 12 / bookworm，.sources 格式）
-RUN sed -i 's@deb.debian.org@mirrors.ustc.edu.cn@g' /etc/apt/sources.list.d/debian.sources && \
-    sed -i 's@security.debian.org@mirrors.ustc.edu.cn@g' /etc/apt/sources.list.d/debian.sources && \
-    apt-get update && \
+# Optional mirror for local builds; official Debian repositories work on CI.
+ARG APT_MIRROR=""
+RUN if [ -n "$APT_MIRROR" ]; then \
+      sed -i "s@deb.debian.org@${APT_MIRROR}@g; s@security.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources; \
+    fi && \
+    apt-get -o Acquire::Retries=3 update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         jq \
         nginx \
         openssl \
-        tzdata && \
+        tzdata \
+        python3 \
+        python3-yaml && \
     rm -f /etc/nginx/sites-enabled/default && \
     rm -rf /var/lib/apt/lists/*
 
@@ -54,15 +61,20 @@ ARG YACD_REF="gh-pages"
 
 RUN set -eux; \
     mkdir -p /opt/ui/metacubexd /opt/ui/zashboard /opt/ui/yacd /opt/portal; \
-    curl -fsSL "https://codeload.github.com/${METACUBEXD_REPO}/tar.gz/refs/heads/${METACUBEXD_REF}" | tar -xzf - -C /opt/ui/metacubexd --strip-components=1; \
-    curl -fsSL "https://codeload.github.com/${ZASHBOARD_REPO}/tar.gz/refs/heads/${ZASHBOARD_REF}" | tar -xzf - -C /opt/ui/zashboard --strip-components=1; \
-    curl -fsSL "https://codeload.github.com/${YACD_REPO}/tar.gz/refs/heads/${YACD_REF}" | tar -xzf - -C /opt/ui/yacd --strip-components=1; \
+    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 180 "https://codeload.github.com/${METACUBEXD_REPO}/tar.gz/refs/heads/${METACUBEXD_REF}" -o /tmp/ui.tar.gz; \
+    tar -xzf /tmp/ui.tar.gz -C /opt/ui/metacubexd --strip-components=1; \
+    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 180 "https://codeload.github.com/${ZASHBOARD_REPO}/tar.gz/refs/heads/${ZASHBOARD_REF}" -o /tmp/ui.tar.gz; \
+    tar -xzf /tmp/ui.tar.gz -C /opt/ui/zashboard --strip-components=1; \
+    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 180 "https://codeload.github.com/${YACD_REPO}/tar.gz/refs/heads/${YACD_REF}" -o /tmp/ui.tar.gz; \
+    tar -xzf /tmp/ui.tar.gz -C /opt/ui/yacd --strip-components=1; \
+    rm -f /tmp/ui.tar.gz; \
     BUILD_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
     VERSION_OUT="$APP_VERSION"; \
     REVISION_OUT="$APP_REVISION"; \
     [ "$VERSION_OUT" = "dev" ] && VERSION_OUT="dev-${BUILD_AT}"; \
     [ "$REVISION_OUT" = "unknown" ] && REVISION_OUT=""; \
-    printf '{"version":"%s","revision":"%s","source":"%s","builtAt":"%s"}\n' "$VERSION_OUT" "$REVISION_OUT" "$APP_SOURCE" "$BUILD_AT" > /opt/portal/project-version.json
+    jq -n --arg version "$VERSION_OUT" --arg revision "$REVISION_OUT" --arg source "$APP_SOURCE" --arg builtAt "$BUILD_AT" \
+      '{version:$version,revision:$revision,source:$source,builtAt:$builtAt}' > /opt/portal/project-version.json
 
 # 构建阶段预置 geodata，供弱网首启兜底
 RUN set -eux; \
@@ -105,10 +117,13 @@ RUN chown -R www-data:www-data /opt/portal && chmod 775 /opt/portal
 # 启动脚本
 COPY entrypoint.sh /entrypoint.sh
 COPY config.yaml.template /opt/builtin-rules.yaml
+COPY scripts/config_tool.py /opt/scripts/config_tool.py
+COPY scripts/healthcheck.sh /opt/scripts/healthcheck.sh
 COPY scripts/connectivity_probe.sh /opt/scripts/connectivity_probe.sh
 COPY scripts/proxy_connectivity_probe.sh /opt/scripts/proxy_connectivity_probe.sh
 
 RUN chmod +x /usr/bin/clash /entrypoint.sh /opt/scripts/connectivity_probe.sh /opt/scripts/proxy_connectivity_probe.sh
 
 WORKDIR /root/.config/clash
+HEALTHCHECK --interval=30s --timeout=15s --start-period=120s --retries=3 CMD ["bash", "/opt/scripts/healthcheck.sh"]
 ENTRYPOINT ["/entrypoint.sh"]

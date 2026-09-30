@@ -1,0 +1,6 @@
+proxies:
+  - {name: 直连, type: direct}
+proxy-groups:
+  - {name: 默认代理, type: select, include-all: true}
+rules:
+  - MATCH,默认代理
