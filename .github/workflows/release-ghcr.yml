@@ -57,11 +57,15 @@ jobs:
       - name: Create source archive
         if: github.ref_type == 'tag'
         run: git archive --format=tar.gz --output "docker-clash-${GITHUB_REF_NAME}.tar.gz" "${GITHUB_SHA}"
-      - name: Create draft release
+      - name: Prepare release notes
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        run: python3 scripts/release_notes.py "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v3
         with:
-          draft: true
+          draft: false
+          name: ${{ github.ref_name }}
           generate_release_notes: false
-          body: 请手动补充本版本更新日志。
+          body_path: ${{ runner.temp }}/release-notes.md
           files: docker-clash-${{ github.ref_name }}.tar.gz
