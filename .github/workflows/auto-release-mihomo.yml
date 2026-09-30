@@ -37,14 +37,18 @@ jobs:
           current_tag="$(tr -d '[:space:]' < core/mihomo-version.txt)"
           changed=false
           [[ "$latest_tag" == "$current_tag" ]] || changed=true
-          echo "changed=$changed" >> "$GITHUB_OUTPUT"
-          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          {
+            echo "changed=$changed"
+            echo "latest_tag=$latest_tag"
+            echo "current_tag=$current_tag"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Prepare local version commit
         id: version
         if: steps.check.outputs.changed == 'true'
         env:
           MIHOMO_TAG: ${{ steps.check.outputs.latest_tag }}
+          PREVIOUS_MIHOMO_TAG: ${{ steps.check.outputs.current_tag }}
         run: |
           set -euo pipefail
           latest="$(git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)"
@@ -58,7 +62,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add core/mihomo-version.txt
-          git commit -m "chore(core): track mihomo $MIHOMO_TAG"
+          git commit -m "🔧 chore(core): 升级 mihomo $PREVIOUS_MIHOMO_TAG → $MIHOMO_TAG"
           {
             echo "tag=$tag"
             echo "version=${tag#v}"
@@ -84,9 +88,10 @@ jobs:
           git push --atomic origin "HEAD:$GITHUB_REF_NAME" "$PROJECT_TAG"
 
       # Token pushes do not trigger tag workflows; also repair interrupted releases.
-      - name: Ensure draft release exists
+      - name: Ensure release exists
         env:
           GH_TOKEN: ${{ github.token }}
+          PREVIOUS_MIHOMO_TAG: ${{ steps.check.outputs.current_tag }}
         run: |
           set -euo pipefail
           tag="$(git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)"
@@ -94,4 +99,5 @@ jobs:
           if gh release view "$tag" > /dev/null 2>&1; then exit 0; fi
           archive="docker-clash-$tag.tar.gz"
           git archive --format=tar.gz --output "$archive" "$tag"
-          gh release create "$tag" "$archive" --verify-tag --draft --title "$tag" --notes '请手动补充本版本更新日志。'
+          python3 scripts/release_notes.py "$tag" --previous-core "$PREVIOUS_MIHOMO_TAG" > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$tag" "$archive" --verify-tag --title "$tag" --notes-file "$RUNNER_TEMP/release-notes.md"

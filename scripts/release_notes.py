@@ -33,7 +33,8 @@ if changelog.exists():
 
 core = Path('core/mihomo-version.txt').read_text().strip()
 if not ''.join(notes).strip():
-    notes = ['### 内核更新', '', f'- mihomo：{args.previous_core + " → " if args.previous_core else ""}{core}。']
+    previous = args.previous_core if args.previous_core != core else None
+    notes = ['### 内核更新', '', f'- mihomo：{previous + " → " if previous else ""}{core}。']
 
 print('\n'.join(notes).strip())
 print(f'\n### 镜像\n\n- `ghcr.io/bctjo/docker-clash:{version}`\n- `ghcr.io/bctjo/docker-clash:latest`\n- 平台：`linux/amd64`、`linux/arm64`。\n- 内核：`{core}`。')
