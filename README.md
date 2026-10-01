@@ -29,6 +29,16 @@ docker compose up -d
 docker compose exec -T clash cat /root/.config/clash/portal-admin.key
 ```
 
+密码没有复杂度要求，可以直接设置成自己方便记忆的密码。修改 `.env` 后运行 `docker compose up -d`，容器会使用新设置。
+
+从 `v1.1.2` 起，如果想关闭 Portal 密码，在 `.env` 中加入：
+
+```dotenv
+PORTAL_AUTH_ENABLED=false
+```
+
+然后执行 `docker compose pull` 和 `docker compose up -d`。关闭后无需登录即可访问管理功能、订阅地址和 API 密钥；已有密码文件会保留，重新设为 `true` 后继续使用。
+
 3. 打开 Portal 并登录（用户名固定为 `admin`）
 
 - `http://localhost:9090`
@@ -85,10 +95,11 @@ docker compose exec -T clash cat /root/.config/clash/portal-admin.key
 - `SUBSCR_DOWNLOAD_MAX_TIME`: 更新订阅时单次下载超时（秒，默认 120）
 - `SUBSCR_CONNECT_TIMEOUT`: 订阅下载连接超时（秒，默认 15）
 - `PORTAL_ADMIN_KEY`: Portal 管理密码（未指定时自动生成）
+- `PORTAL_AUTH_ENABLED`: 是否启用 Portal 密码（默认 `true`，设置 `false` 可关闭；优先于密码设置）
 - `CONFIG_VALIDATE_MAX_TIME`: 配置校验超时（秒，默认 90）
 - `SUBSCR_MAX_BYTES`: 订阅最大下载大小（字节，默认 16 MiB）
 - `UPDATE_INTERVAL`: 自动更新间隔（秒，默认 43200）
-- `CLASH_SECRET`: API 密钥（为空会生成并持久化；只向已登录用户提供）
+- `CLASH_SECRET`: API 密钥（为空会生成并持久化；访问权限遵循 Portal 认证设置）
 
 更多配置可查看 `docker-compose.yml`。
 
