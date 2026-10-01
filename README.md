@@ -29,6 +29,16 @@ docker compose up -d
 docker compose exec -T clash cat /root/.config/clash/portal-admin.key
 ```
 
+从 `v1.1.3` 起，自动生成的密码也会在每次容器启动时显示，日志中搜索“自动生成密码”即可：
+
+```bash
+docker compose logs clash
+```
+
+登录后打开“设置 → 修改管理密码”，输入当前密码、新密码及确认密码即可。修改立即生效，旧密码失效，新密码会保存到 `data/portal-admin.key`，重启后继续使用。手动设置或在页面修改的密码不会打印到日志。
+
+页面修改的密码会优先于原来的 `PORTAL_ADMIN_KEY` 环境变量；如果需要通过环境变量重置密码，把 `PORTAL_ADMIN_KEY` 改成一个新的非空值，再运行 `docker compose up -d`。
+
 密码没有复杂度要求，可以直接设置成自己方便记忆的密码。修改 `.env` 后运行 `docker compose up -d`，容器会使用新设置。
 
 从 `v1.1.2` 起，如果想关闭 Portal 密码，在 `.env` 中加入：
