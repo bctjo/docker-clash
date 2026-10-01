@@ -60,7 +60,9 @@ for label, enabled, custom, saved in [
             config = request('/config.js')[1].decode().split('=', 1)[1].strip().rstrip(';')
             assert json.loads(config)['adminAuthEnabled'] is enabled
             if enabled:
-                password = custom or key.read_text().strip()
+                # The generated key is owned by container root with mode 600.
+                # Linux CI users must read it through docker exec, as users do.
+                password = custom or docker('exec', container, 'cat', '/root/.config/clash/portal-admin.key')
                 assert request('/connection.json')[0] == 403
                 assert request('/connection.json', password)[0] == 200
                 assert request('/connection.json', 'wrong-password')[0] == 403
