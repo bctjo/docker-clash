@@ -27,4 +27,6 @@ jobs:
       - name: Configuration tests
         run: docker run --rm --entrypoint python3 -v "$PWD:/src:ro" -w /src clash-meta-review:local -m unittest discover -s tests -p 'test_*.py' -v
       - name: Runtime regression tests
-        run: python3 -u tests/integration.py
+        run: |
+          python3 -u tests/auth_integration.py
+          python3 -u tests/integration.py

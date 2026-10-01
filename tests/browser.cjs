@@ -8,13 +8,16 @@ const { chromium } = require('playwright');
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(process.env.PORTAL_URL);
-    await page.locator('#admin-modal.open').waitFor();
-    await page.locator('#admin-key').fill('wrong-password');
-    await page.locator('#admin-confirm').click();
-    await page.locator('#admin-error').filter({hasText: '错误'}).waitFor();
-    await page.locator('#admin-key').fill(process.env.PORTAL_PASSWORD);
-    await page.locator('#admin-confirm').click();
+    if (process.env.BROWSER_NO_AUTH !== '1') {
+      await page.locator('#admin-modal.open').waitFor();
+      await page.locator('#admin-key').fill('wrong-password');
+      await page.locator('#admin-confirm').click();
+      await page.locator('#admin-error').filter({hasText: '错误'}).waitFor();
+      await page.locator('#admin-key').fill(process.env.PORTAL_PASSWORD);
+      await page.locator('#admin-confirm').click();
+    }
     await page.locator('#info').filter({hasText: 'Secret'}).waitFor();
+    assert.equal(await page.locator('#admin-modal.open').count(), 0);
     if (process.env.BROWSER_SETUP_ONLY === '1') {
       await page.locator('#subs-modal.open').waitFor();
       await page.locator('#close-subs').click();
