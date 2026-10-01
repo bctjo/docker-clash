@@ -258,20 +258,17 @@ ensure_secret() {
 }
 
 ensure_portal_admin_key() {
-    local key_file="$CONFIG_DIR/portal-admin.key"
+    local result source
     if [[ "$PORTAL_AUTH_ENABLED" == false ]]; then
         PORTAL_ADMIN_KEY=""
         return 0
     fi
-    if [[ -z "$PORTAL_ADMIN_KEY" ]]; then
-        if [[ -s "$key_file" ]]; then
-            PORTAL_ADMIN_KEY=$(cat "$key_file")
-        else
-            PORTAL_ADMIN_KEY=$(generate_secret)
-            (umask 077; printf '%s\n' "$PORTAL_ADMIN_KEY" > "$key_file.tmp")
-            mv "$key_file.tmp" "$key_file"
-            log "Portal admin password generated. Read $key_file or set PORTAL_ADMIN_KEY."
-        fi
+    result=$(PORTAL_ADMIN_KEY="$PORTAL_ADMIN_KEY" python3 /opt/scripts/password_tool.py initialize \
+        --directory "$CONFIG_DIR" --auth-file "$PORTAL_AUTH_FILE") || { log "ERROR: Unable to initialize Portal password."; return 1; }
+    PORTAL_ADMIN_KEY=$(printf '%s' "$result" | jq -r '.password')
+    source=$(printf '%s' "$result" | jq -r '.source')
+    if [[ "$source" == generated ]]; then
+        log "Portal 用户名: admin；自动生成密码: $PORTAL_ADMIN_KEY"
     fi
 }
 
@@ -1086,11 +1083,23 @@ watch_portal_update() {
                     url=$(printf '%s' "$request_body" | jq -r '.url // empty' 2>/dev/null || true)
                     validate_subscription_url "$url" "$request_id" || true
                     ;;
+                password)
+                    local password_result
+                    password_result=$(printf '%s' "$request_body" | python3 /opt/scripts/password_tool.py change \
+                        --directory "$CONFIG_DIR" --auth-file "$PORTAL_AUTH_FILE" --enabled "$PORTAL_AUTH_ENABLED") || true
+                    if printf '%s' "$password_result" | jq -e '.ok == true' >/dev/null 2>&1; then
+                        write_task_status "$request_id" success "密码已修改并保存。"
+                    else
+                        write_task_status "$request_id" failed "$(printf '%s' "$password_result" | jq -r '.message // "密码修改失败。"' 2>/dev/null || printf '密码修改失败。')"
+                    fi
+                    unset password_result
+                    ;;
                 latency-browser|latency-router)
                     local mode="${kind#latency-}"
                     (refresh_latency_cache "$mode" "$request_id" || true) &
                     ;;
             esac
+            unset request_body
         done
         find "$PORTAL_TASK_DIR" -type f -mmin +1440 -delete
         if [[ -f "$PORTAL_UPDATE_TRIGGER" ]]; then
@@ -1298,20 +1307,14 @@ auto_update_loop() {
 start_portal() {
     ensure_secret
     ensure_portal_admin_key
-    mkdir -p "$PORTAL_TASK_DIR" "$PORTAL_REQUEST_DIR"/{updates,validations,latency-browser,latency-router}
+    mkdir -p "$PORTAL_TASK_DIR" "$PORTAL_REQUEST_DIR"/{updates,validations,latency-browser,latency-router,password}
     chown -R www-data:www-data "$PORTAL_TASK_DIR" "$PORTAL_REQUEST_DIR"
     if [[ ! -f "$PORTAL_CONF_TEMPLATE" ]]; then
         cp "$PORTAL_CONF" "$PORTAL_CONF_TEMPLATE"
     fi
     cp "$PORTAL_CONF_TEMPLATE" "$PORTAL_CONF"
     if [[ -n "$PORTAL_ADMIN_KEY" ]]; then
-        if command -v openssl >/dev/null 2>&1; then
-            printf 'admin:%s\n' "$(printf '%s\n' "$PORTAL_ADMIN_KEY" | openssl passwd -apr1 -stdin)" > "$PORTAL_AUTH_FILE"
-            sed -i "s|__PORTAL_AUTH__|auth_basic \"Portal Admin\"; auth_basic_user_file $PORTAL_AUTH_FILE;|g" "$PORTAL_CONF"
-        else
-            log "ERROR: openssl missing; cannot enable Portal authentication."
-            return 1
-        fi
+        sed -i "s|__PORTAL_AUTH__|auth_basic \"Portal Admin\"; auth_basic_user_file $PORTAL_AUTH_FILE;|g" "$PORTAL_CONF"
     else
         sed -i "s|__PORTAL_AUTH__||g" "$PORTAL_CONF"
     fi

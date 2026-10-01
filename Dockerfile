@@ -118,6 +118,7 @@ RUN chown -R www-data:www-data /opt/portal && chmod 775 /opt/portal
 COPY entrypoint.sh /entrypoint.sh
 COPY config.yaml.template /opt/builtin-rules.yaml
 COPY scripts/config_tool.py /opt/scripts/config_tool.py
+COPY scripts/password_tool.py /opt/scripts/password_tool.py
 COPY scripts/healthcheck.sh /opt/scripts/healthcheck.sh
 COPY scripts/connectivity_probe.sh /opt/scripts/connectivity_probe.sh
 COPY scripts/proxy_connectivity_probe.sh /opt/scripts/proxy_connectivity_probe.sh
