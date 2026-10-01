@@ -137,6 +137,8 @@
         backdrop-filter: blur(6px);
       }
       .modal-card {
+        max-height: calc(100dvh - 32px);
+        overflow-y: auto;
         position: relative;
         z-index: 1;
         width: min(460px, 92vw);
@@ -182,6 +184,8 @@
         border-color: var(--accent);
         box-shadow: 0 0 0 3px var(--ring);
       }
+      .auto-field { white-space: nowrap; }
+      .auto-field input { width: 6rem; flex: 0 0 auto; }
       .field textarea {
         min-height: 136px;
         resize: vertical;
@@ -578,6 +582,18 @@
                   分钟
                 </label>
               </div>
+              <div className="mt-5 border-t pt-4" style=${{ borderColor: 'var(--border)' }}>
+                <h3 className="mb-2 text-sm font-semibold">修改管理密码</h3>
+                <p id="password-hint" className="mb-3 text-xs" style=${{ color: 'var(--muted)' }}>修改后立即生效，重启后仍可使用。</p>
+                <form id="password-form" className="grid gap-3">
+                  <label className="field">当前密码<input id="current-password" type="password" autocomplete="current-password" required /></label>
+                  <label className="field">新密码<input id="new-password" type="password" autocomplete="new-password" maxLength="128" required /></label>
+                  <label className="field">确认新密码<input id="confirm-password" type="password" autocomplete="new-password" maxLength="128" required /></label>
+                  <p id="password-result" role="status" className="text-xs" style=${{ display: 'none' }}></p>
+                  <button id="change-password" type="submit" className="justify-self-start rounded-lg border px-3 py-1.5 text-xs font-semibold"
+                    style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}>修改密码</button>
+                </form>
+              </div>
               <div className="modal-actions">
                 <button className="rounded-lg border px-3 py-1.5 text-xs" style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }} id="close-settings">取消</button>
                 <button className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-white" style=${{ borderColor: 'var(--accent-strong)', background: 'var(--accent-strong)' }} id="save-settings">保存</button>
@@ -704,6 +720,7 @@
       const updateIntervalSec = Number(config.updateIntervalSec || '0');
       const adminAuthEnabled = config.adminAuthEnabled === true;
       const adminStorageKey = 'portalAdminKey';
+      let passwordChangeInProgress = false;
 
       const portalPortEl = document.getElementById('portal-port');
       if (portalPortEl) portalPortEl.textContent = portalPort;
@@ -859,12 +876,15 @@
         }).join('');
       };
 
+      const passwordHeader = (key) => {
+        const token = btoa(String.fromCharCode(...new TextEncoder().encode(`admin:${key}`)));
+        return { Authorization: `Basic ${token}` };
+      };
       const getAdminHeader = () => {
         if (!adminAuthEnabled) return {};
         const key = sessionStorage.getItem(adminStorageKey);
         if (!key) return {};
-        const token = btoa(String.fromCharCode(...new TextEncoder().encode(`admin:${key}`)));
-        return { Authorization: `Basic ${token}` };
+        return passwordHeader(key);
       };
 
       const adminModal = document.getElementById('admin-modal');
@@ -946,11 +966,14 @@
               return new Response(null, { status: 403 });
             }
           }
+          const keyAtRequest = sessionStorage.getItem(adminStorageKey);
           const headers = { ...(options.headers || {}), ...getAdminHeader() };
           const res = await fetch(url, { ...options, headers });
           if (!isAuthFailed(res.status) || !adminAuthEnabled || !allowPrompt) {
             return res;
           }
+          if (passwordChangeInProgress) return res;
+          if (keyAtRequest !== sessionStorage.getItem(adminStorageKey)) continue;
           sessionStorage.removeItem(adminStorageKey);
         }
         return new Response(null, { status: 403 });
@@ -1772,14 +1795,83 @@
       const autoEnabledInput = document.getElementById('auto-enabled');
       const builtinEnabledInput = document.getElementById('builtin-enabled');
       const autoMinutesInput = document.getElementById('auto-minutes');
+      const passwordForm = document.getElementById('password-form');
+      const currentPasswordInput = document.getElementById('current-password');
+      const newPasswordInput = document.getElementById('new-password');
+      const confirmPasswordInput = document.getElementById('confirm-password');
+      const changePassword = document.getElementById('change-password');
+      const passwordResult = document.getElementById('password-result');
+      if (!adminAuthEnabled) {
+        passwordForm.hidden = true;
+        passwordForm.style.display = 'none';
+        document.getElementById('password-hint').textContent = '管理密码已关闭，启用后可在此修改密码。';
+      }
+      passwordForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (changePassword.disabled || !adminAuthEnabled) return;
+        const currentPassword = currentPasswordInput.value;
+        const newPassword = newPasswordInput.value;
+        const confirmPassword = confirmPasswordInput.value;
+        passwordResult.style.display = 'block';
+        passwordResult.style.color = 'var(--text)';
+        if (newPassword !== confirmPassword) {
+          passwordResult.textContent = '两次输入的新密码不一致。';
+          return;
+        }
+        const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+        changePassword.disabled = true;
+        passwordChangeInProgress = true;
+        changePassword.textContent = '修改中...';
+        passwordResult.textContent = '正在保存密码...';
+        try {
+          const response = await fetch(`/requests/password/${requestId}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json', ...passwordHeader(currentPassword) },
+            body: JSON.stringify({ currentPassword, newPassword, confirmPassword })
+          });
+          if (response.status === 401 || response.status === 403) throw new Error('当前密码不正确。');
+          if (!response.ok) throw new Error('密码修改请求失败，请稍后重试。');
+          const deadline = Date.now() + 600000;
+          let completed = false;
+          while (Date.now() < deadline) {
+            await sleep(500);
+            // Credentials change during processing; either password may still be active.
+            for (const password of [newPassword, currentPassword]) {
+              const result = await fetch(`/tasks/${requestId}.json?t=${Date.now()}`, {
+                cache: 'no-store', headers: passwordHeader(password)
+              });
+              if (!result.ok) continue;
+              const task = await result.json();
+              if (task.requestId !== requestId) continue;
+              if (task.state === 'failed') throw new Error(task.message);
+              if (task.state === 'success') { completed = true; break; }
+            }
+            if (completed) break;
+          }
+          if (!completed) throw new Error('等待密码修改超时，请使用新密码重新登录确认。');
+          sessionStorage.setItem(adminStorageKey, newPassword);
+          passwordForm.reset();
+          passwordResult.textContent = '密码已修改并保存。';
+          passwordResult.style.color = '#16a34a';
+        } catch (error) {
+          passwordResult.textContent = error.message || '密码修改失败，请稍后重试。';
+          passwordResult.style.color = '#ef4444';
+        } finally {
+          passwordChangeInProgress = false;
+          changePassword.disabled = false;
+          changePassword.textContent = '修改密码';
+        }
+      });
 
       const openModal = () => {
+        passwordForm.reset();
+        passwordResult.style.display = 'none';
         settingsModal.classList.add('open');
         settingsModal.setAttribute('aria-hidden', 'false');
       };
       const closeModal = () => {
         settingsModal.classList.remove('open');
         settingsModal.setAttribute('aria-hidden', 'true');
+        passwordForm.reset();
       };
 
       const loadSettings = async () => {
