@@ -17,6 +17,7 @@ SUBSCR_RETRY=${SUBSCR_RETRY:-2}
 SUBSCR_RETRY_DELAY=${SUBSCR_RETRY_DELAY:-2}
 SUBSCR_MAX_BYTES=${SUBSCR_MAX_BYTES:-16777216}
 PORTAL_ADMIN_KEY=${PORTAL_ADMIN_KEY:-}
+PORTAL_AUTH_ENABLED=${PORTAL_AUTH_ENABLED:-true}
 CONFIG_VALIDATE_MAX_TIME=${CONFIG_VALIDATE_MAX_TIME:-90}
 PORTAL_TASK_DIR="/opt/portal/tasks"
 PORTAL_REQUEST_DIR="/opt/portal/requests"
@@ -73,6 +74,11 @@ mkdir -p "$SUBS_CACHE_DIR"
 # ========= 函数：日志 =========
 validate_environment() {
     local name value
+    case "${PORTAL_AUTH_ENABLED,,}" in
+        1|true|yes|on) PORTAL_AUTH_ENABLED=true ;;
+        0|false|no|off) PORTAL_AUTH_ENABLED=false ;;
+        *) log "ERROR: PORTAL_AUTH_ENABLED must be true or false."; return 1 ;;
+    esac
     local -A used_ports=()
     for name in PORTAL_PORT DASH_PORT CLASH_HTTP_PORT CLASH_SOCKS_PORT CLASH_TPROXY_PORT CLASH_MIXED_PORT; do
         value="${!name}"
@@ -253,6 +259,10 @@ ensure_secret() {
 
 ensure_portal_admin_key() {
     local key_file="$CONFIG_DIR/portal-admin.key"
+    if [[ "$PORTAL_AUTH_ENABLED" == false ]]; then
+        PORTAL_ADMIN_KEY=""
+        return 0
+    fi
     if [[ -z "$PORTAL_ADMIN_KEY" ]]; then
         if [[ -s "$key_file" ]]; then
             PORTAL_ADMIN_KEY=$(cat "$key_file")
@@ -294,8 +304,9 @@ write_portal_config() {
         --arg httpPort "$CLASH_HTTP_PORT" --arg socksPort "$CLASH_SOCKS_PORT" \
         --arg tproxyPort "$CLASH_TPROXY_PORT" --arg mixedPort "$CLASH_MIXED_PORT" \
         --arg updateIntervalSec "$UPDATE_INTERVAL" \
+        --argjson adminAuthEnabled "$PORTAL_AUTH_ENABLED" \
         '{dashPort:$dashPort,portalPort:$portalPort,httpPort:$httpPort,socksPort:$socksPort,
-          tproxyPort:$tproxyPort,mixedPort:$mixedPort,updateIntervalSec:$updateIntervalSec,adminAuthEnabled:true}')
+          tproxyPort:$tproxyPort,mixedPort:$mixedPort,updateIntervalSec:$updateIntervalSec,adminAuthEnabled:$adminAuthEnabled}')
     printf 'window.__PORTAL_CONFIG__ = %s;\n' "$json" > "$PORTAL_CONFIG"
     jq -n --arg secret "$CLASH_SECRET" '{secret:$secret}' > /opt/portal/connection.json
     ensure_public_file_readable /opt/portal/connection.json
