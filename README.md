@@ -21,9 +21,29 @@
 docker compose up -d
 ```
 
-2. 设置或读取管理密码
+2. 打开 Portal
 
-可以在项目 `.env` 中设置 `PORTAL_ADMIN_KEY=你的密码`（参见 `.env.example`）。未设置时，首次启动自动生成密码，并保存在持久化目录中；通过以下命令读取：
+- `http://localhost:9090`
+- 从 `v1.1.4` 起默认无需登录；未设置认证开关的旧容器更新镜像后也不会自动开启密码。
+
+3. 填写订阅地址并保存
+
+保存时页面会等待后台校验和应用结果，成功后即可在面板中使用。
+
+内置规则模板默认关闭，使用订阅自带的分组和规则。因此默认需要包含 `rules` 的完整 Clash YAML 配置（或 `mode: global` 的配置）。只有节点列表的 YAML 订阅需要在设置中开启内置规则模板；节点 URI 和 Base64 订阅需要先转换为 Clash YAML。
+
+启用内置模板时，“🚀 默认代理”优先选择“⚡ 自动选择”（全部节点自动测速），其次才是香港等地区分组。已有的模板开关和手动选择继续保留。
+
+## 可选：开启管理密码
+
+密码认证默认关闭。需要登录保护时，在项目 `.env` 中显式设置：
+
+```dotenv
+PORTAL_AUTH_ENABLED=true
+PORTAL_ADMIN_KEY=你的密码
+```
+
+用户名固定为 `admin`。认证开启后，如果没有设置密码且没有保存过密码，首次启动会自动生成密码并持久化；可以通过以下命令读取：
 
 ```bash
 docker compose exec -T clash cat /root/.config/clash/portal-admin.key
@@ -41,7 +61,7 @@ docker compose logs clash
 
 密码没有复杂度要求，可以直接设置成自己方便记忆的密码。修改 `.env` 后运行 `docker compose up -d`，容器会使用新设置。
 
-从 `v1.1.2` 起，如果想关闭 Portal 密码，在 `.env` 中加入：
+如果想关闭 Portal 密码，在 `.env` 中加入：
 
 ```dotenv
 PORTAL_AUTH_ENABLED=false
@@ -49,17 +69,7 @@ PORTAL_AUTH_ENABLED=false
 
 然后执行 `docker compose pull` 和 `docker compose up -d`。关闭后无需登录即可访问管理功能、订阅地址和 API 密钥；已有密码文件会保留，重新设为 `true` 后继续使用。
 
-3. 打开 Portal 并登录（用户名固定为 `admin`）
-
-- `http://localhost:9090`
-
-4. 填写订阅地址并保存
-
-保存时页面会等待后台校验和应用结果，成功后即可在面板中使用。
-
-内置规则模板默认关闭，使用订阅自带的分组和规则。因此默认需要包含 `rules` 的完整 Clash YAML 配置（或 `mode: global` 的配置）。只有节点列表的 YAML 订阅需要在设置中开启内置规则模板；节点 URI 和 Base64 订阅需要先转换为 Clash YAML。
-
-启用内置模板时，“🚀 默认代理”优先选择“⚡ 自动选择”（全部节点自动测速），其次才是香港等地区分组。已有的模板开关和手动选择继续保留。
+如果旧版 `docker-compose.yml` 的 `environment` 已写入 `PORTAL_AUTH_ENABLED: "true"` 或 `${PORTAL_AUTH_ENABLED:-true}`，仅更新镜像会继续沿用这个值。请把该项改为 `"false"`，再运行 `docker compose up -d` 重建容器。已有密码文件会保留，但不会自行重新开启认证。
 
 ## 默认端口
 
@@ -104,8 +114,8 @@ PORTAL_AUTH_ENABLED=false
 - `SUBSCR_VALIDATE_MAX_TIME`: 导入订阅时单次校验下载超时（秒，默认 120）
 - `SUBSCR_DOWNLOAD_MAX_TIME`: 更新订阅时单次下载超时（秒，默认 120）
 - `SUBSCR_CONNECT_TIMEOUT`: 订阅下载连接超时（秒，默认 15）
-- `PORTAL_ADMIN_KEY`: Portal 管理密码（未指定时自动生成）
-- `PORTAL_AUTH_ENABLED`: 是否启用 Portal 密码（默认 `true`，设置 `false` 可关闭；优先于密码设置）
+- `PORTAL_ADMIN_KEY`: Portal 管理密码（仅在显式开启认证后使用；未指定且无已保存密码时自动生成）
+- `PORTAL_AUTH_ENABLED`: 是否启用 Portal 密码（默认 `false`，显式设置 `true` 才开启；优先于密码设置）
 - `CONFIG_VALIDATE_MAX_TIME`: 配置校验超时（秒，默认 90）
 - `SUBSCR_MAX_BYTES`: 订阅最大下载大小（字节，默认 16 MiB）
 - `UPDATE_INTERVAL`: 自动更新间隔（秒，默认 43200）
@@ -113,7 +123,7 @@ PORTAL_AUTH_ENABLED=false
 
 更多配置可查看 `docker-compose.yml`。
 
-Portal 密码保护管理操作、连接密钥及订阅信息。HTTP / SOCKS / Mixed 代理端口保持 LAN 访问方式；代理自身的账号密码通过 Clash 配置的 `authentication` 设置。
+开启 Portal 认证后，密码会保护管理操作、连接密钥及订阅信息。HTTP / SOCKS / Mixed 代理端口保持 LAN 访问方式；代理自身的账号密码通过 Clash 配置的 `authentication` 设置。
 
 延迟检测有两种模式：“容器直连检测”从容器发起连接，“代理规则检测”通过 Mixed 端口按当前规则访问各个目标；这两种检测都不代表浏览器所在设备的网络。
 
