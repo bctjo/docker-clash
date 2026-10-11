@@ -18,7 +18,19 @@ def docker(*args):
     return subprocess.check_output(['docker', *args], text=True).strip()
 
 
+for filename in ('docker-compose.yml', 'docker-compose.dev.yml'):
+    for configured, expected in [('', 'false'), ('true', 'true')]:
+        rendered = subprocess.check_output(['docker', 'compose', '-f', str(ROOT / filename), 'config', '--format', 'json'],
+                                           env={**os.environ, 'PORTAL_AUTH_ENABLED': configured}, text=True)
+        services = json.loads(rendered)['services'].values()
+        assert all(service['environment']['PORTAL_AUTH_ENABLED'] == expected for service in services)
+print('PASS: Compose defaults to disabled and preserves explicit opt-in', flush=True)
+
+
 for label, enabled, custom, saved in [
+    ('default startup needs no password', None, '', None),
+    ('default startup ignores an existing generated password', None, '', 'f' * 48),
+    ('default startup ignores a configured password', None, '1234', 'saved-password'),
     ('generated password', True, '', None),
     ('simple custom password', True, '1234', 'saved-password'),
     ('disabled with existing password', False, '1234', 'saved-password'),
@@ -29,9 +41,12 @@ for label, enabled, custom, saved in [
         key = data / 'portal-admin.key'
         if saved:
             key.write_text(saved + '\n')
+            if enabled is None and saved == 'f' * 48:
+                (data / 'portal-auth.json').write_text(json.dumps({'source': 'generated'}))
+        auth_environment = [] if enabled is None else ['-e', f'PORTAL_AUTH_ENABLED={str(enabled).lower()}']
         container = docker('run', '-d', '--name', 'clash-auth-' + uuid.uuid4().hex[:8],
                            '-p', '127.0.0.1::9090', '-v', f'{data}:/root/.config/clash',
-                           '-e', f'PORTAL_AUTH_ENABLED={str(enabled).lower()}',
+                           *auth_environment,
                            '-e', f'PORTAL_ADMIN_KEY={custom}', '-e', 'GEODATA_AUTO_UPDATE=false', IMAGE)
         try:
             portal = 'http://' + docker('port', container, '9090/tcp')
@@ -58,7 +73,7 @@ for label, enabled, custom, saved in [
                 assert time.monotonic() < deadline, docker('logs', '--tail', '20', container)
                 time.sleep(0.3)
             config = request('/config.js')[1].decode().split('=', 1)[1].strip().rstrip(';')
-            assert json.loads(config)['adminAuthEnabled'] is enabled
+            assert json.loads(config)['adminAuthEnabled'] is (enabled is True)
             if enabled:
                 # The generated key is owned by container root with mode 600.
                 # Linux CI users must read it through docker exec, as users do.
@@ -140,7 +155,7 @@ for label, enabled, custom, saved in [
                     assert time.monotonic() < deadline
                     time.sleep(0.3)
                 assert '自动生成密码:' not in docker('logs', container)
-                if os.environ.get('RUN_BROWSER_TESTS') == '1' and not saved:
+                if os.environ.get('RUN_BROWSER_TESTS') == '1' and not saved and enabled is None:
                     subprocess.run(['node', str(ROOT / 'tests/browser.cjs')], check=True,
                                    env={**os.environ, 'PORTAL_URL': portal, 'BROWSER_NO_AUTH': '1', 'BROWSER_SETUP_ONLY': '1'})
             print('PASS:', label, flush=True)

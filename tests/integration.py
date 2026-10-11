@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix='clash-integration-') as directory:
     container = docker('run', '-d', '--name', 'clash-test-' + uuid.uuid4().hex[:8],
                        '-p', '127.0.0.1::9090', '-p', '127.0.0.1::9097',
                        '-v', f'{data}:/root/.config/clash', '-v', f'{ROOT / "tests"}:/opt/tests:ro',
-                       '-e', f'PORTAL_ADMIN_KEY={PASSWORD}', '-e', 'SUBSCR_RETRY=0',
+                       '-e', 'PORTAL_AUTH_ENABLED=true', '-e', f'PORTAL_ADMIN_KEY={PASSWORD}', '-e', 'SUBSCR_RETRY=0',
                        '-e', 'SUBSCR_DOWNLOAD_MAX_TIME=3', '-e', 'SUBSCR_CONNECT_TIMEOUT=1',
                        '-e', 'GEODATA_AUTO_UPDATE=false',
                        *sum((['-e', f'PROXY_TEST_URL_{site}=http://127.0.0.1:18888/subscription.yaml'] for site in ['YOUTUBE', 'GITHUB', 'TMDB', 'BAIDU']), []), '-e', 'BUILTIN_RULE_FILE=/opt/tests/minimal-template.yaml', IMAGE)
