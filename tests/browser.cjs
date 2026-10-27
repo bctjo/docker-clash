@@ -16,7 +16,7 @@ const { chromium } = require('playwright');
       await page.locator('#admin-key').fill(process.env.PORTAL_PASSWORD);
       await page.locator('#admin-confirm').click();
     }
-    await page.locator('#info').filter({hasText: 'Secret'}).waitFor();
+    await page.locator('#info').filter({hasText: 'HTTP'}).waitFor();
     assert.equal(await page.locator('#admin-modal.open').count(), 0);
     if (process.env.BROWSER_SETUP_ONLY === '1') {
       await page.locator('#subs-modal.open').waitFor();
@@ -42,7 +42,7 @@ const { chromium } = require('playwright');
     await page.waitForFunction(() => !document.querySelector('#update-sub').disabled, {timeout: 30000});
     assert.match(await page.locator('#update-sub').getAttribute('title'), /成功|应用/);
     await page.reload();
-    await page.locator('#info').filter({hasText: 'Secret'}).waitFor();
+    await page.locator('#info').filter({hasText: 'HTTP'}).waitFor();
     assert.deepEqual(errors, []);
     console.log('PASS: browser login, wrong password, default settings, saving, update completion, session reuse');
   } finally {

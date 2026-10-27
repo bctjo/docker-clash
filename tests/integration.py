@@ -3,6 +3,8 @@ import base64
 import hashlib
 import json
 import os
+import socket
+import struct
 from pathlib import Path
 import subprocess
 import tempfile
@@ -37,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix='clash-integration-') as directory:
     data = Path(directory) / 'data'
     data.mkdir()
     container = docker('run', '-d', '--name', 'clash-test-' + uuid.uuid4().hex[:8],
-                       '-p', '127.0.0.1::9090', '-p', '127.0.0.1::9097',
+                       '-p', '127.0.0.1::9090', '-e', 'DASH_PORT=19097',
                        '-v', f'{data}:/root/.config/clash', '-v', f'{ROOT / "tests"}:/opt/tests:ro',
                        '-e', 'PORTAL_AUTH_ENABLED=true', '-e', f'PORTAL_ADMIN_KEY={PASSWORD}', '-e', 'SUBSCR_RETRY=0',
                        '-e', 'SUBSCR_DOWNLOAD_MAX_TIME=3', '-e', 'SUBSCR_CONNECT_TIMEOUT=1',
@@ -45,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='clash-integration-') as directory:
                        *sum((['-e', f'PROXY_TEST_URL_{site}=http://127.0.0.1:18888/subscription.yaml'] for site in ['YOUTUBE', 'GITHUB', 'TMDB', 'BAIDU']), []), '-e', 'BUILTIN_RULE_FILE=/opt/tests/minimal-template.yaml', IMAGE)
     try:
         portal = 'http://' + docker('port', container, '9090/tcp')
-        api = 'http://' + docker('port', container, '9097/tcp')
+        api = portal
         authorization = 'Basic ' + base64.b64encode(('admin:' + PASSWORD).encode()).decode()
 
         def request(path, method='GET', payload=None, auth=True, base=None, bearer=None):
@@ -108,6 +110,46 @@ with tempfile.TemporaryDirectory(prefix='clash-integration-') as directory:
         assert request('/subscriptions.json', 'PUT', {'requestId': initial_id, 'active': 0, 'urls': [url]})[0] in (201, 204)
         assert eventually(lambda: result(initial_id))['state'] == 'success'
         eventually(lambda: request('/version', base=api, bearer=secret)[0] == 200)
+        # Only Portal is published, with a custom internal core port. All API
+        # authentication and dashboard assets must work through this one port.
+        assert request('/version', auth=False)[0] == 401
+        assert request('/version', bearer='wrong-secret')[0] == 401
+        for panel in ('metacubexd', 'zashboard', 'yacd'):
+            code, body = request(f'/ui/{panel}/', auth=False)
+            assert code == 200 and b'<html' in body.lower(), panel
+        assert request('/configs', bearer=secret)[0] == 200
+        assert request('/configs', 'PATCH', {'mode': 'rule'}, bearer=secret)[0] == 204
+        assert request('/proxies', bearer=secret)[0] == 200
+
+        def websocket(path, read_frame=True):
+            target = urllib.parse.urlsplit(portal)
+            with socket.create_connection((target.hostname, target.port), timeout=10) as sock:
+                sock.settimeout(10)
+                nonce = base64.b64encode(os.urandom(16)).decode()
+                sock.sendall((f'GET {path}?token={secret} HTTP/1.1\r\nHost: {target.netloc}\r\n'
+                              f'Origin: {portal}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+                              f'Sec-WebSocket-Key: {nonce}\r\nSec-WebSocket-Version: 13\r\n\r\n').encode())
+                stream = sock.makefile('rb')
+                assert b'101' in stream.readline()
+                headers = {}
+                while (line := stream.readline()) != b'\r\n':
+                    key, value = line.decode().split(':', 1)
+                    headers[key.lower()] = value.strip()
+                expected = base64.b64encode(hashlib.sha1((nonce + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
+                assert headers['sec-websocket-accept'] == expected
+                if read_frame:
+                    opcode, length = stream.read(2)
+                    assert opcode & 0xf == 1 and length & 0x80 == 0
+                    if length == 126:
+                        length = struct.unpack('!H', stream.read(2))[0]
+                    elif length == 127:
+                        length = struct.unpack('!Q', stream.read(8))[0]
+                    assert isinstance(json.loads(stream.read(length)), dict)
+
+        for endpoint in ('/traffic', '/connections', '/memory'):
+            websocket(endpoint)
+        websocket('/logs', read_frame=False)
+        print('PASS: only Portal published; dashboard HTML, REST writes, API authentication and WebSocket streams')
         docker('exec', container, 'bash', '/opt/scripts/healthcheck.sh')
         cache = data / 'proxies' / hashlib.md5(url.encode()).hexdigest()
         original_cache = cache.read_bytes()
@@ -189,18 +231,83 @@ update_resources update active simulated-reload-failure
         print('PASS: invalid settings rejected; operation results persist')
         print('PASS: template switches apply with the real hot reload API')
 
+        def save_proxy_auth(username, password, success=True):
+            settings = read('/settings.json')
+            settings.update(requestId=str(uuid.uuid4()), proxyUsername=username, proxyPassword=password)
+            assert request('/settings.json', 'PUT', settings)[0] in (201, 204)
+            assert eventually(lambda: result(settings['requestId']))['state'] == ('success' if success else 'failed')
+
+        def proxy_probe(protocol, credentials=''):
+            # Runs entirely inside the test container and reaches the fixture
+            # server through the actual HTTP/Mixed/SOCKS listeners.
+            port = {'http': 7890, 'mixed': 7893, 'socks': 7891}[protocol]
+            scheme = 'socks5h' if protocol == 'socks' else 'http'
+            command = ['docker', 'exec', container, 'curl', '-sS', '--max-time', '8', '--noproxy', '',
+                       '--proxy', f'{scheme}://127.0.0.1:{port}', '-o', '/dev/null', '-w', '%{http_code}']
+            if credentials:
+                command += ['--proxy-user', credentials]
+            command += ['http://127.0.0.1:18888/subscription.yaml']
+            return subprocess.run(command, capture_output=True, text=True)
+
+        save_proxy_auth('', '')
+        for protocol in ('http', 'mixed', 'socks'):
+            assert proxy_probe(protocol).stdout == '200'
+        save_proxy_auth('test-user', '', success=False)
+        save_proxy_auth('invalid:user', 'pass', success=False)
+        save_proxy_auth('test-user', 'proxy-pass:123')
+        for protocol in ('http', 'mixed', 'socks'):
+            assert proxy_probe(protocol).stdout != '200'
+            assert proxy_probe(protocol, 'test-user:wrong').stdout != '200'
+            assert proxy_probe(protocol, 'test-user:proxy-pass:123').stdout == '200'
+        # Pause the automatic worker to inject a failed reload deterministically.
+        docker('exec', container, 'sh', '-c', 'kill -STOP "$(cat /tmp/portal-auto-worker.pid)"')
+        try:
+            pending_settings = read('/settings.json')
+            pending_settings.update(requestId='proxy-rollback', proxyUsername='replacement', proxyPassword='other-pass')
+            assert request('/settings.json', 'PUT', pending_settings)[0] in (201, 204)
+            failed_reload = '''source <(sed '/^# ========= 主逻辑/,$d' /entrypoint.sh)
+reload_clash_via_api() { return 1; }
+update_resources switch switch proxy-rollback
+'''
+            proc = subprocess.run(['docker', 'exec', container, 'bash', '-c', failed_reload], capture_output=True, text=True)
+            assert proc.returncode == 1, proc.stdout + proc.stderr
+            assert read('/settings.json')['proxyUsername'] == 'test-user'
+            assert result('proxy-rollback')['state'] == 'failed'
+            assert proxy_probe('mixed', 'test-user:proxy-pass:123').stdout == '200'
+            assert proxy_probe('mixed', 'replacement:other-pass').stdout != '200'
+        finally:
+            docker('exec', container, 'sh', '-c', 'kill -CONT "$(cat /tmp/portal-auto-worker.pid)"')
+        latency = submit('latency-router', {})
+        assert all(site['reachable'] for site in eventually(lambda: result(latency))['sites'])
+        task = submit('updates', {'scope': 'active'})
+        assert eventually(lambda: result(task))['state'] == 'success'
+        assert proxy_probe('mixed').stdout == '407'
+        assert proxy_probe('mixed', 'test-user:proxy-pass:123').stdout == '200'
+        print('PASS: optional proxy authentication, wrong/missing credentials, all proxy listeners and authenticated latency probes')
+
         if os.environ.get('RUN_BROWSER_TESTS') == '1':
             subprocess.run(['node', str(ROOT / 'tests/browser.cjs')], check=True,
                            env={**os.environ, 'PORTAL_URL': portal, 'PORTAL_PASSWORD': PASSWORD})
         docker('restart', container)
         portal = 'http://' + docker('port', container, '9090/tcp')
-        api = 'http://' + docker('port', container, '9097/tcp')
+        api = portal
         eventually(lambda: request('/version', base=api, bearer=secret)[0] == 200)
         assert read('/connection.json')['secret'] == secret
         assert read('/subscriptions.json')['active'] == 0
         assert cache.read_bytes() == original_cache
         docker('exec', container, 'bash', '/opt/scripts/healthcheck.sh')
         print('PASS: restart while subscription server is offline uses last known good cache')
+        docker('exec', '-d', container, 'python3', '/opt/tests/fixture_server.py')
+        eventually(lambda: subprocess.run(['docker', 'exec', container, 'curl', '-fsS', '-o', '/dev/null',
+                   'http://127.0.0.1:18888/subscription.yaml'], capture_output=True).returncode == 0)
+        assert read('/settings.json')['proxyUsername'] == 'test-user'
+        assert proxy_probe('mixed').stdout == '407'
+        assert proxy_probe('mixed', 'test-user:proxy-pass:123').stdout == '200'
+        save_proxy_auth('', '')
+        for protocol in ('http', 'mixed', 'socks'):
+            assert proxy_probe(protocol).stdout == '200'
+        print('PASS: proxy credentials persist after update/restart; clearing both fields disables authentication')
+        docker('exec', container, 'bash', '/opt/scripts/healthcheck.sh')
     except Exception:
         print(docker('logs', '--tail', '80', container))
         raise

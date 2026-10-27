@@ -9,8 +9,8 @@ services:
     volumes:
       - ./data:/root/.config/clash
     ports:
-      - "9090:9090" # Portal
-      - "9097:9097" # Dashboard
+      - "9090:9090" # Portal / Dashboard / Clash API（统一入口）
+      # - "9097:9097" # 可选：直连 Clash API，面板和单端口穿透无需映射
       - "7890:7890" # HTTP
       - "7891:7891" # SOCKS5
       - "7892:7892" # TPROXY

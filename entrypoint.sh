@@ -1054,11 +1054,15 @@ refresh_latency_cache() (
 watch_portal_update() {
     while true; do
         if [[ ! -f /tmp/portal-core-started && -s "$SETTINGS_PUBLIC" ]]; then
-            if jq -e '(.autoEnabled|type)=="boolean" and (.builtinEnabled|type)=="boolean" and
-                (.intervalMinutes|type)=="number" and .intervalMinutes>=0 and .intervalMinutes<=10080 and
-                (.autoEnabled==false or .intervalMinutes>=1)' "$SETTINGS_PUBLIC" >/dev/null 2>&1; then
+            local settings_error
+            if settings_error=$(python3 /opt/scripts/config_tool.py --validate-settings "$SETTINGS_PUBLIC" 2>&1); then
                 cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"
+                chmod 600 "$SETTINGS_FILE"
                 write_task_status "$(jq -r '.requestId // empty' "$SETTINGS_PUBLIC")" success "设置已保存"
+            else
+                write_task_status "$(jq -r '.requestId // empty' "$SETTINGS_PUBLIC" 2>/dev/null || true)" failed "$settings_error"
+                cp "$SETTINGS_FILE" "$SETTINGS_PUBLIC"
+                ensure_public_file_readable "$SETTINGS_PUBLIC"
             fi
         fi
         local request kind request_id request_body claimed
@@ -1141,15 +1145,17 @@ watch_portal_update() {
 init_settings() {
     local default_minutes
     if [[ -f "$SETTINGS_FILE" ]]; then
+        chmod 600 "$SETTINGS_FILE"
         cp "$SETTINGS_FILE" "$SETTINGS_PUBLIC"
         ensure_public_file_readable "$SETTINGS_PUBLIC"
         return
     fi
     default_minutes=$(awk "BEGIN{printf \"%.2f\", $UPDATE_INTERVAL/60}")
     cat > "$SETTINGS_FILE" <<EOF
-{"autoEnabled":true,"intervalMinutes":$default_minutes,"builtinEnabled":false}
+{"autoEnabled":true,"intervalMinutes":$default_minutes,"builtinEnabled":false,"proxyUsername":"","proxyPassword":""}
 EOF
     cp "$SETTINGS_FILE" "$SETTINGS_PUBLIC"
+    chmod 600 "$SETTINGS_FILE"
     ensure_public_file_readable "$SETTINGS_PUBLIC"
 }
 
@@ -1169,7 +1175,7 @@ generate_config() {
     local -a args=()
     [[ "$builtin_enabled" != "true" ]] || args+=(--template "$BUILTIN_RULE_FILE")
     python3 /opt/scripts/config_tool.py --subscription "$sub_file" --output "$target_file" \
-        --secret-file "$PORTAL_STATE_FILE" --ports "$(jq -nc \
+        --secret-file "$PORTAL_STATE_FILE" --settings-file "$SETTINGS_PUBLIC" --ports "$(jq -nc \
           --argjson port "$CLASH_HTTP_PORT" --argjson socks "$CLASH_SOCKS_PORT" \
           --argjson mixed "$CLASH_MIXED_PORT" --argjson tproxy "$CLASH_TPROXY_PORT" \
           --arg controller "0.0.0.0:$DASH_PORT" \
@@ -1189,7 +1195,7 @@ auto_update_loop() {
     local subs_mtime
     local last_subs_signature=""
     local current_subs_signature=""
-    local settings_snapshot settings_request_id
+    local settings_snapshot settings_request_id settings_error previous_proxy_auth proxy_auth
 
     # 初始化基线，避免容器启动后首次轮询被误判为“文件变更”
     if [[ -f "$SETTINGS_PUBLIC" ]]; then
@@ -1198,6 +1204,7 @@ auto_update_loop() {
         cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"
         IFS='|' read -r enabled interval_minutes builtin_enabled <<< "$(read_settings)"
         prev_builtin_enabled="$builtin_enabled"
+        proxy_auth=$(jq -c '[(has("proxyUsername") or has("proxyPassword")), .proxyUsername // "", .proxyPassword // ""]' "$SETTINGS_FILE")
     fi
     if [[ -f "$SUBSCRIPTIONS_PUBLIC" ]]; then
         subs_mtime=$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)
@@ -1216,10 +1223,8 @@ auto_update_loop() {
                 mtime=$(sha256sum "$settings_snapshot" | cut -d' ' -f1)
                 last_settings_mtime="$mtime"
                 settings_request_id=$(jq -r '.requestId // empty' "$settings_snapshot" 2>/dev/null || true)
-                if ! jq -e '(.autoEnabled|type)=="boolean" and (.builtinEnabled|type)=="boolean" and
-                    (.intervalMinutes|type)=="number" and .intervalMinutes>=0 and .intervalMinutes<=10080 and
-                    (.autoEnabled==false or .intervalMinutes>=1)' "$settings_snapshot" >/dev/null 2>&1; then
-                    write_task_status "$settings_request_id" failed "更新间隔或设置格式无效"
+                if ! settings_error=$(python3 /opt/scripts/config_tool.py --validate-settings "$settings_snapshot" 2>&1); then
+                    write_task_status "$settings_request_id" failed "$settings_error"
                     if [[ "$mtime" == "$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)" ]]; then
                         cp "$SETTINGS_FILE" "$SETTINGS_PUBLIC"
                     fi
@@ -1229,17 +1234,20 @@ auto_update_loop() {
                     continue
                 fi
                 cp "$settings_snapshot" "$SETTINGS_FILE"
+                chmod 600 "$SETTINGS_FILE"
+                previous_proxy_auth="$proxy_auth"
+                proxy_auth=$(jq -c '[(has("proxyUsername") or has("proxyPassword")), .proxyUsername // "", .proxyPassword // ""]' "$settings_snapshot")
                 prev_builtin_enabled="$builtin_enabled"
                 IFS='|' read -r enabled interval_minutes builtin_enabled <<< "$(read_settings "$settings_snapshot")"
                 rm -f "$settings_snapshot"
                 log "Auto update settings changed: enabled=$enabled interval=${interval_minutes}m builtin=$builtin_enabled"
                 next_run=0
-                if [[ "$builtin_enabled" != "$prev_builtin_enabled" ]]; then
-                    log "Built-in rule switch changed ($prev_builtin_enabled -> $builtin_enabled), applying immediately..."
+                if [[ "$builtin_enabled" != "$prev_builtin_enabled" || "$proxy_auth" != "$previous_proxy_auth" ]]; then
+                    log "Rule template or proxy authentication changed, applying immediately..."
                     if update_resources "switch" "switch" "$settings_request_id" "" "$mtime"; then
-                        log "Built-in rule switch applied successfully."
+                        log "Settings applied successfully."
                     else
-                        log "WARNING: Failed to apply built-in rule switch immediately."
+                        log "WARNING: Failed to apply settings immediately."
                     fi
                 else
                     write_task_status "$settings_request_id" success "设置已保存"
@@ -1343,7 +1351,7 @@ start_portal() {
         write_latency_default "router"
     fi
     if [[ -f "$PORTAL_CONF" ]]; then
-        sed -i "s/__PORTAL_PORT__/$PORTAL_PORT/g" "$PORTAL_CONF"
+        sed -i -e "s/__PORTAL_PORT__/$PORTAL_PORT/g" -e "s/__DASH_PORT__/$DASH_PORT/g" "$PORTAL_CONF"
     fi
     log "Starting portal server on port $PORTAL_PORT..."
     nginx
@@ -1418,10 +1426,15 @@ restore_applied_selection() {
         fi
     done
     if [[ -s "$SETTINGS_PUBLIC" && "${settings_signature:-}" == "$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)" ]]; then
-        jq --argjson builtin "$old_builtin" '.builtinEnabled=$builtin | del(.requestId)' "$SETTINGS_PUBLIC" > "$SETTINGS_PUBLIC.tmp"
+        jq --argjson builtin "$old_builtin" --slurpfile applied "$APPLIED_STATE_FILE" \
+            '.builtinEnabled=$builtin |
+             if $applied[0].proxyAuthConfigured then
+               .proxyUsername=$applied[0].proxyUsername | .proxyPassword=$applied[0].proxyPassword
+             else del(.proxyUsername,.proxyPassword) end | del(.requestId)' "$SETTINGS_PUBLIC" > "$SETTINGS_PUBLIC.tmp"
         mv "$SETTINGS_PUBLIC.tmp" "$SETTINGS_PUBLIC"
         ensure_public_file_readable "$SETTINGS_PUBLIC"
         cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"
+        chmod 600 "$SETTINGS_FILE"
     fi
 }
 
@@ -1575,8 +1588,10 @@ update_resources() (
         mv "$stage/$idx.sub" "$(subscription_cache_file_by_index "$idx")"
     done
     cp "$cache" "$DEBUG_RAW_CONFIG"
-    jq -n --arg url "${SUBS_URLS_ARRAY[$active]}" --argjson builtin "$builtin" \
-        '{url:$url,builtinEnabled:$builtin}' > "$APPLIED_STATE_FILE.tmp"
+    jq -n --arg url "${SUBS_URLS_ARRAY[$active]}" --argjson builtin "$builtin" --slurpfile settings "$SETTINGS_PUBLIC" \
+        '{url:$url,builtinEnabled:$builtin,proxyAuthConfigured:($settings[0] | has("proxyUsername") or has("proxyPassword")),proxyUsername:($settings[0].proxyUsername // ""),
+          proxyPassword:($settings[0].proxyPassword // "")}' > "$APPLIED_STATE_FILE.tmp"
+    chmod 600 "$APPLIED_STATE_FILE.tmp"
     mv "$APPLIED_STATE_FILE.tmp" "$APPLIED_STATE_FILE"
     write_subscriptions_state "$SUBSCRIPTIONS_FILE"
     if [[ "$settings_signature" == "$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)" ]]; then

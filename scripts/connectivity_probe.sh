@@ -19,6 +19,7 @@ probe_site() {
 
   local -a proxy_args=()
   [[ -z "${CONNECTIVITY_PROXY:-}" ]] || proxy_args+=(--proxy "$CONNECTIVITY_PROXY" --noproxy '')
+  [[ -z "${CONNECTIVITY_PROXY_USER:-}" ]] || proxy_args+=(--proxy-user "$CONNECTIVITY_PROXY_USER")
   output=$(curl "${proxy_args[@]}" -L -sS -o /dev/null --connect-timeout 5 --max-time 20 -w "%{http_code} %{time_total}" "$url" 2>&1) || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     code=$(printf '%s' "$output" | awk '{print $1}')

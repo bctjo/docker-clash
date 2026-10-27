@@ -73,14 +73,26 @@ PORTAL_AUTH_ENABLED=false
 
 ## 默认端口
 
-- `9090`: Portal
-- `9097`: Clash API / Dashboard
+- `9090`: Portal、全部 Dashboard 和 Clash API 的统一入口
+- `9097`: 容器内 Clash API 端口（可选直连，默认不映射）
 - `7890`: HTTP 代理
 - `7891`: SOCKS5 代理
 - `7892`: TPROXY
 - `7893`: MIXED
 
 如需调整，可在 `docker-compose.yml` 中修改环境变量。
+
+外网只需穿透 Web 端口 `9090`。从 Portal 点击 Metacubexd、Zashboard 或 Yacd，面板页面、API、连接和日志的 WebSocket 都使用当前访问的域名、协议和端口；支持穿透服务将外部 HTTPS 域名或其他端口映射到容器的 `9090`。无需额外穿透 `9097`，也无需手动填写控制地址或 API 密钥。穿透服务需支持 WebSocket。
+
+内部 `DASH_PORT` 与 `PORTAL_PORT` 仍应使用不同端口。需要直接连接内核 API 时，可取消 Compose 中 `9097:9097` 的注释。外网管理可通过前面的“开启管理密码”设置保护。
+
+## 可选：代理用户名和密码
+
+打开 Portal 的“设置 → 代理认证”，填写代理用户名和密码并保存，即可为 HTTP、SOCKS 和 Mixed 代理开启认证。两项都留空并保存，则无需认证；只填写其中一项会提示补全。
+
+代理认证与 Portal 管理密码、Clash API 密钥相互独立，不适用于 TPROXY 透明代理。设置保存到 `data/settings.json`，应用失败会恢复原认证设置，重启、切换订阅和更新订阅后继续生效。开启代理认证后，内置代理规则延迟检测也会携带认证信息。
+
+Portal 保存的代理认证设置优先于订阅中的 `authentication` 和 `skip-auth-prefixes`。升级前已在订阅中设置认证、且尚未通过 Portal 保存代理认证字段时，会保留订阅的原设置。
 
 ## 镜像来源
 
@@ -123,7 +135,7 @@ PORTAL_AUTH_ENABLED=false
 
 更多配置可查看 `docker-compose.yml`。
 
-开启 Portal 认证后，密码会保护管理操作、连接密钥及订阅信息。HTTP / SOCKS / Mixed 代理端口保持 LAN 访问方式；代理自身的账号密码通过 Clash 配置的 `authentication` 设置。
+开启 Portal 认证后，密码会保护管理操作、连接密钥、代理认证设置及订阅信息。面板 API 继续由 Clash API 密钥认证，首页自动连接但不展示该密钥。HTTP / SOCKS / Mixed 代理自身的账号密码在“设置 → 代理认证”中配置。
 
 延迟检测有两种模式：“容器直连检测”从容器发起连接，“代理规则检测”通过 Mixed 端口按当前规则访问各个目标；这两种检测都不代表浏览器所在设备的网络。
 

@@ -46,6 +46,26 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.build('proxies: bad', None, {}, '')
 
+    def test_proxy_auth_overrides_subscription_and_bypass_prefixes(self):
+        source = 'proxies: [{name: Test, type: direct}]\nrules: ["MATCH,Test"]\nauthentication: [old:password]\nskip-auth-prefixes: [127.0.0.0/8]'
+        for template in (None, (ROOT / 'tests/minimal-template.yaml').read_text()):
+            settings = {'proxyUsername': 'user', 'proxyPassword': '含空格 : password'}
+            result = yaml.safe_load(module.build(source, template, {}, 'api-secret', settings))
+            self.assertEqual(result['authentication'], ['user:含空格 : password'])
+            self.assertEqual(result['skip-auth-prefixes'], [])
+            self.assertEqual(result['secret'], 'api-secret')
+        result = yaml.safe_load(module.build(source, None, {}, 'api-secret', {'proxyUsername': '', 'proxyPassword': ''}))
+        self.assertEqual(result['authentication'], [])
+        legacy = yaml.safe_load(module.build(source, None, {}, 'api-secret', {}))
+        self.assertEqual(legacy['authentication'], ['old:password'])
+
+    def test_invalid_proxy_credentials_are_rejected(self):
+        for username, password in [('user', ''), ('', 'pass'), ('user:name', 'pass'),
+                                   ('user', 'p\nass'), ('user', 'p\0ass'), (False, 'pass'),
+                                   ('用户' * 100, 'pass')]:
+            with self.subTest(username=username), self.assertRaises(ValueError):
+                module.proxy_authentication({'proxyUsername': username, 'proxyPassword': password})
+
 
 if __name__ == '__main__':
     unittest.main()
