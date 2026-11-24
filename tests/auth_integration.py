@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -14,6 +15,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = os.environ.get('TEST_IMAGE', 'clash-meta-review:local')
+CONTAINER_DATA = '/root/.config/clash'
 SUBSCRIPTION = 'http://127.0.0.1:18888/subscription.yaml'
 USERNAME = 'clash-owner'
 PASSWORD = 'test-设置-Secret!'
@@ -45,7 +47,7 @@ def basic(username, password):
 def container_with_data(data, *environment):
     container = docker(
         'run', '-d', '--name', 'clash-auth-' + uuid.uuid4().hex[:8],
-        '-p', '127.0.0.1::9090', '-v', f'{data}:/root/.config/clash',
+        '-p', '127.0.0.1::9090', '-v', f'{data}:{CONTAINER_DATA}',
         '-v', f'{ROOT / "tests"}:/opt/tests:ro', '-e', 'GEODATA_AUTO_UPDATE=false',
         '-e', 'SUBSCR_RETRY=0', '-e', 'SUBSCR_DOWNLOAD_MAX_TIME=3', '-e', 'SUBSCR_CONNECT_TIMEOUT=1',
         '-e', 'BUILTIN_RULE_FILE=/opt/tests/minimal-template.yaml', *environment, IMAGE,
@@ -57,6 +59,10 @@ def container_with_data(data, *environment):
         raise
     finally:
         docker('rm', '-f', container)
+        # Root-owned bind-mount files and directories must be removable by the runner.
+        if sys.platform == 'linux' and os.geteuid() != 0:
+            docker('run', '--rm', '-v', f'{data}:{CONTAINER_DATA}', '--entrypoint', 'chown',
+                   IMAGE, '-R', f'{os.getuid()}:{os.getgid()}', CONTAINER_DATA)
 
 
 def portal_client(container):
@@ -135,8 +141,8 @@ with tempfile.TemporaryDirectory(prefix='clash-setup-fresh-') as directory:
         docker('exec', '-d', container, 'python3', '/opt/tests/fixture_server.py')
         assert task('setup', {**credentials, 'url': SUBSCRIPTION.replace('subscription.yaml', 'broken')}, '')['state'] == 'failed'
         assert_gate(request)
-        assert 'PORTAL_ADMIN_USERNAME' not in (data / '.env').read_text()
-        assert json.loads((data / 'subscriptions.json').read_text())['urls'] == []
+        assert 'PORTAL_ADMIN_USERNAME' not in docker('exec', container, 'cat', f'{CONTAINER_DATA}/.env')
+        assert json.loads(docker('exec', container, 'cat', f'{CONTAINER_DATA}/subscriptions.json'))['urls'] == []
 
         if os.environ.get('RUN_BROWSER_TESTS') == '1':
             subprocess.run(['node', str(ROOT / 'tests/browser.cjs')], check=True,
@@ -149,9 +155,9 @@ with tempfile.TemporaryDirectory(prefix='clash-setup-fresh-') as directory:
         assert request('/setup/requests/second', payload=credentials)[0] == 409
         assert request('/connection.json', basic('admin', PASSWORD))[0] == 403
         assert request('/connection.json', auth)[0] == 200
-        env_text = (data / '.env').read_text()
+        env_text = docker('exec', container, 'cat', f'{CONTAINER_DATA}/.env')
         assert PASSWORD not in env_text
-        assert (data / '.env').stat().st_mode & 0o777 == 0o600
+        assert docker('exec', container, 'stat', '-c', '%a', f'{CONTAINER_DATA}/.env') == '600'
         assert SUBSCRIPTION in env_text
         new_auth = basic(USERNAME, NEW_PASSWORD)
         assert task('password', {'currentPassword': PASSWORD, 'newPassword': NEW_PASSWORD,
@@ -223,7 +229,9 @@ with tempfile.TemporaryDirectory(prefix='clash-setup-yaml-') as directory:
         state('pending', True, True)
         assert request('/requests/uploads/blocked', auth, upload('blocked.yaml', configuration))[0] == 403
         invalid = task('setup', {**credentials, **upload('broken.yaml', b'not a Clash config')}, '')
-        assert invalid['state'] == 'failed' and not list((data / 'local-subscriptions').glob('*.yaml'))
+        assert invalid['state'] == 'failed'
+        assert not docker('exec', container, 'find', f'{CONTAINER_DATA}/local-subscriptions',
+                          '-maxdepth', '1', '-name', '*.yaml', '-print')
         mixed = task('setup', {**credentials, **upload('mixed.yaml', configuration), 'url': SUBSCRIPTION}, '')
         assert mixed['state'] == 'failed'
         if os.environ.get('RUN_BROWSER_TESTS') == '1':
@@ -247,12 +255,14 @@ with tempfile.TemporaryDirectory(prefix='clash-setup-yaml-') as directory:
         subscriptions = json.loads(request('/subscriptions.json', auth)[1])
         saved = subscriptions['items'][0]
         assert saved['name'] == yaml_path.name
-        assert saved['url'] == 'local:' + hashlib.sha256(yaml_path.read_bytes()).hexdigest()
-        saved_file = data / 'local-subscriptions' / (saved['url'].split(':', 1)[1] + '.yaml')
-        assert saved_file.read_bytes() == yaml_path.read_bytes()
-        assert saved_file.stat().st_mode & 0o777 == 0o600
+        digest = hashlib.sha256(yaml_path.read_bytes()).hexdigest()
+        assert saved['url'] == 'local:' + digest
+        filename = f'{digest}.yaml'
+        saved_file = f'{CONTAINER_DATA}/local-subscriptions/{filename}'
+        assert docker('exec', container, 'sha256sum', saved_file).split()[0] == digest
+        assert docker('exec', container, 'stat', '-c', '%a', saved_file) == '600'
         assert request('/requests/uploads/blocked', payload=upload('blocked.yaml', configuration))[0] == 403
-        assert request('/local-subscriptions/' + saved_file.name)[0] in (401, 403, 404)
+        assert request('/local-subscriptions/' + filename)[0] in (401, 403, 404)
         active_before_restart = subscriptions['urls'][subscriptions['active']]
         docker('restart', container)
         _, request, state, _ = portal_client(container)
