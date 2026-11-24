@@ -7,6 +7,46 @@ from pathlib import Path
 import yaml
 
 
+# Outbounds exposing client-fingerprint in the pinned Mihomo core. QUIC
+# protocols (e.g. hysteria2/tuic) do not use this uTLS option.
+CLIENT_FINGERPRINT_TYPES = (
+    "anytls", "gost-relay", "snell", "ss", "trojan", "trusttunnel", "vless", "vmess",
+)
+
+
+def migrate_global_client_fingerprint(config):
+    """Translate the removed global default without replacing node overrides."""
+    fingerprint = config.pop("global-client-fingerprint", None)
+    if fingerprint is None or fingerprint == "":
+        return
+    if not isinstance(fingerprint, str):
+        raise ValueError("global-client-fingerprint 必须是文本。")
+    for proxy in config.get("proxies", []):
+        if isinstance(proxy, dict) and proxy.get("type") in CLIENT_FINGERPRINT_TYPES:
+            proxy.setdefault("client-fingerprint", fingerprint)
+
+    # Providers are parsed/refreshed by Mihomo after this builder has run.
+    # A plain override.client-fingerprint is not supported by v1.19.33.
+    # Run a conditional expression after user expressions so their values win,
+    # and keep the migration active across HTTP/file/inline provider refreshes.
+    types = " or ".join(f".type == {json.dumps(kind)}" for kind in CLIENT_FINGERPRINT_TYPES)
+    expression = (
+        f'(select(({types}) and has("client-fingerprint") == false)'
+        f' | .client-fingerprint) = {json.dumps(fingerprint)}'
+    )
+    for provider in config.get("proxy-providers", {}).values():
+        if not isinstance(provider, dict):
+            raise ValueError("订阅中的 proxy-providers 项必须是映射。")
+        override = provider.setdefault("override", {})
+        if not isinstance(override, dict):
+            raise ValueError("proxy-providers 的 override 必须是映射。")
+        expressions = override.setdefault("override-expr", [])
+        if not isinstance(expressions, list) or any(not isinstance(item, str) for item in expressions):
+            raise ValueError("proxy-providers 的 override-expr 必须是文本列表。")
+        if expression not in expressions:
+            expressions.append(expression)
+
+
 def proxy_authentication(settings):
     username = settings.get("proxyUsername", "")
     password = settings.get("proxyPassword", "")
@@ -43,8 +83,12 @@ def build(subscription, template, ports, secret, settings=None):
         raise ValueError("订阅中的 proxies / proxy-providers 格式不正确。")
     if not proxies and not providers:
         raise ValueError("订阅没有可用节点或节点提供者。")
+    # Migrate before merging: the template path otherwise loses the source's
+    # global field, and template nodes should retain their own defaults.
+    migrate_global_client_fingerprint(source)
     if template:
         config = yaml.safe_load(template)
+        migrate_global_client_fingerprint(config)
         # A complete subscription may contain inline nodes, providers, or both.
         # Copy the nodes into the template instead of treating a full config as
         # a provider file, which loses provider-only subscriptions.

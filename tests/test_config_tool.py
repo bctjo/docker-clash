@@ -11,6 +11,77 @@ spec.loader.exec_module(module)
 
 
 class ConfigTests(unittest.TestCase):
+    def build_fingerprint_config(self, config, template=None):
+        config = {'mode': 'global', **config}
+        return yaml.safe_load(module.build(yaml.safe_dump(config), template, {}, 'test'))
+
+    def test_global_fingerprint_migrates_in_both_template_modes(self):
+        proxies = [
+            {'name': kind, 'type': kind} for kind in module.CLIENT_FINGERPRINT_TYPES
+        ] + [
+            {'name': 'explicit', 'type': 'vless', 'client-fingerprint': 'firefox'},
+            {'name': 'disabled', 'type': 'vless', 'client-fingerprint': 'none'},
+            {'name': 'empty', 'type': 'vless', 'client-fingerprint': ''},
+            {'name': 'quic', 'type': 'hysteria2'},
+            {'name': 'direct', 'type': 'direct'},
+        ]
+        for template in (None, 'proxies: []\nrules: ["MATCH,DIRECT"]'):
+            with self.subTest(template=bool(template)):
+                result = self.build_fingerprint_config({
+                    'global-client-fingerprint': 'safari', 'proxies': proxies,
+                }, template)
+                self.assertNotIn('global-client-fingerprint', result)
+                nodes = {node['name']: node for node in result['proxies']}
+                for kind in module.CLIENT_FINGERPRINT_TYPES:
+                    self.assertEqual(nodes[kind]['client-fingerprint'], 'safari')
+                for name, value in [('explicit', 'firefox'), ('disabled', 'none'), ('empty', '')]:
+                    self.assertEqual(nodes[name]['client-fingerprint'], value)
+                for name in ('quic', 'direct'):
+                    self.assertNotIn('client-fingerprint', nodes[name])
+
+    def test_absent_or_empty_global_fingerprint_does_not_add_defaults(self):
+        for global_setting in ({}, {'global-client-fingerprint': ''}, {'global-client-fingerprint': None}):
+            source = {**global_setting, 'proxies': [{'name': 'node', 'type': 'vless'}],
+                      'proxy-providers': {'remote': {'type': 'http', 'url': 'https://example.com'}}}
+            result = self.build_fingerprint_config(source)
+            self.assertNotIn('client-fingerprint', result['proxies'][0])
+            self.assertEqual(result['proxy-providers'], source['proxy-providers'])
+            self.assertNotIn('global-client-fingerprint', result)
+
+    def test_template_and_subscription_keep_separate_fingerprint_defaults(self):
+        template = yaml.safe_dump({'global-client-fingerprint': 'firefox',
+                                   'proxies': [{'name': 'template', 'type': 'vmess'}]})
+        result = self.build_fingerprint_config({
+            'global-client-fingerprint': 'chrome',
+            'proxies': [{'name': 'subscription', 'type': 'vless'}],
+        }, template)
+        self.assertEqual([node['client-fingerprint'] for node in result['proxies']], ['firefox', 'chrome'])
+        self.assertNotIn('global-client-fingerprint', result)
+
+    def test_provider_migration_preserves_overrides_and_is_idempotent(self):
+        for template in (None, 'proxies: []\nrules: ["MATCH,DIRECT"]'):
+            source = {'global-client-fingerprint': 'chrome', 'proxy-providers': {
+                kind: {'type': kind, 'override': {'udp': True, 'override-expr': [
+                    '.client-fingerprint = "firefox"',
+                ]}} for kind in ('http', 'file', 'inline')
+            }}
+            result = self.build_fingerprint_config(source, template)
+            for provider in result['proxy-providers'].values():
+                self.assertTrue(provider['override']['udp'])
+                expressions = provider['override']['override-expr']
+                self.assertEqual(expressions[0], '.client-fingerprint = "firefox"')
+                self.assertEqual(len(expressions), 2)
+            rebuilt = self.build_fingerprint_config(result, template)
+            self.assertEqual(rebuilt['proxy-providers'], result['proxy-providers'])
+
+    def test_malformed_fingerprint_settings_raise_clear_errors(self):
+        with self.assertRaisesRegex(ValueError, 'global-client-fingerprint'):
+            self.build_fingerprint_config({'global-client-fingerprint': [], 'proxies': [{'type': 'vless'}]})
+        for override in ([], {'override-expr': 'not-a-list'}, {'override-expr': [42]}):
+            with self.subTest(override=override), self.assertRaisesRegex(ValueError, 'override'):
+                self.build_fingerprint_config({'global-client-fingerprint': 'chrome',
+                    'proxy-providers': {'bad': {'type': 'http', 'override': override}}})
+
     def test_complete_config_preserves_rules_and_normalizes_ports(self):
         source = 'proxies: [{name: Proxy, type: http, server: localhost, port: 80}]\nrules: [MATCH,DIRECT]\n# port: 111\nexternal-controller: old\n'
         result = yaml.safe_load(module.build(source, None, {'port': 7890, 'external-controller': '0.0.0.0:9097'}, '密钥"\\&\n'))
