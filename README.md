@@ -1,185 +1,180 @@
 # Clash Meta Docker
 
-一个开箱即用的 Clash Meta（mihomo）容器方案。
+用 Docker Compose 部署 Mihomo（Clash Meta），然后在 **Clash Portal** 里导入订阅、管理配置、查看连接状态。控制台内置 Metacubexd、Yacd 和 Zashboard，使用同一个 Web 入口打开。
 
-你只需要启动容器、填入订阅，就可以通过统一 Portal 完成配置、更新和状态查看，不需要手动改一堆配置文件。
+[快速开始](#快速开始) · [日常操作](#日常操作) · [端口与远程访问](#端口与远程访问) · [常见问题](#常见问题) · [更新日志](CHANGELOG.md)
 
-## 这是什么
+![Clash Portal 控制台，包含面板入口、代理端口、订阅状态和连接延时](screenshots/portal-desktop-light.png)
 
-这个项目把 Clash Meta 的日常使用流程做成了一个完整产品化体验：
+*截图使用测试实例。默认 Web 端口是 `9090`，订阅余量和延时以实际运行结果为准。*
 
-- 内置 Portal 管理页面，先用再折腾
-- 内置多套 Web UI（metacubexd / zashboard / yacd）
-- 自动处理 geodata 下载、配置校验和失败回滚
-- 支持定时更新与手动更新，减少断流和重启循环
+<details>
+<summary>查看深色模式和手机布局</summary>
 
-## 3 分钟上手
+![Clash Portal 桌面深色模式](screenshots/portal-desktop-dark.png)
 
-1. 启动服务
+<img src="screenshots/portal-mobile-light.png" alt="Clash Portal 手机布局" width="390">
+
+</details>
+
+## 快速开始
+
+准备好 **Docker 和 Docker Compose**，以及一份 Clash YAML 订阅链接或本地文件。项目发布的镜像支持 `linux/amd64` 和 `linux/arm64`。
+
+### 1. 启动容器
 
 ```bash
+git clone https://github.com/bctjo/docker-clash.git
+cd docker-clash
 docker compose up -d
 ```
 
-2. 打开 `http://localhost:9090`
+[默认 Compose 文件](docker-compose.yml)使用 `ghcr.nju.edu.cn/bctjo/docker-clash:latest`，并把运行数据保存到项目根目录下的 `./data` 目录。
 
-3. 在全屏初始化页设置管理用户名和密码，输入 Clash YAML 订阅链接，或上传本地 `.yaml` / `.yml` 文件，然后完成校验。
+### 2. 打开 Portal 并完成初始化
 
-初始化会校验订阅配置并等待 Mihomo 启动。全部完成后自动进入控制台。失败时可修正配置并重试。
+在部署主机上打开 <http://localhost:9090>。从其他设备访问时，把 `localhost` 换成部署主机的地址。
 
-进入控制台后，可在“订阅”中上传、切换或替换本地 YAML。文件最大 16 MiB，保存在 `data/local-subscriptions/`。定时更新只下载链接订阅，本地配置可通过重新上传更新。
+设置管理用户名和密码，选择 **订阅链接** 或 **本地 YAML**，然后点击 **校验并启用**。配置通过校验且 Mihomo 启动后，Portal 会自动进入控制台。
 
-内置规则模板默认关闭，使用订阅自带的分组和规则。因此默认需要包含 `rules` 的完整 Clash YAML 配置（或 `mode: global` 的配置）。只有节点列表的 YAML 订阅需要在设置中开启内置规则模板；节点 URI 和 Base64 订阅需要先转换为 Clash YAML。
+![首次启动的初始化页面，包含管理账号、订阅来源与校验按钮](screenshots/setup.jpg)
 
-启用内置模板时，“🚀 默认代理”优先选择“⚡ 自动选择”（全部节点自动测速），其次才是香港等地区分组。已有的模板开关和手动选择继续保留。
+默认使用订阅自带的规则和分组，请导入含 `rules` 的完整 Clash YAML，或使用 `mode: global` 的配置。如果 YAML 只有节点列表，勾选 **使用内置规则模板**。节点 URI 或 Base64 订阅需要先转换为 Clash YAML。
 
-旧订阅中的 `global-client-fingerprint` 会在生成配置时迁移为支持该选项的节点的 `client-fingerprint`，保留节点显式设置（包括 `none`）。完整配置和内置模板模式均支持。HTTP / file / inline 类型的 `proxy-providers` 通过条件覆写在加载及更新时补齐缺少的指纹，保留已有覆写表达式的优先级。最终配置移除旧全局字段，原始订阅缓存保持原样。provider 迁移使用 `override-expr`，自定义旧内核需确认支持该功能。项目固定的 Mihomo 版本见 [core/mihomo-version.txt](core/mihomo-version.txt)。
+### 3. 打开面板或连接代理
 
-## 管理账号与升级
+在 **面板入口** 点击 Metacubexd、Yacd 或 Zashboard，即可使用当前 Portal 地址连接内核。需要为客户端配置代理时，可以在 **代理连接** 复制 Mixed 端口的 HTTP 地址。
 
-已有自设管理密码会迁移并继续生效，旧版用户名仍为 `admin`。曾经免登录或只使用自动生成密码的实例会先要求设置自己的账号和密码。已有可用订阅会沿用，订阅不可用时初始化页会要求重新导入。旧版的 `PORTAL_AUTH_ENABLED=false` 已失效。
+<details>
+<summary>查看登录页</summary>
 
-Portal 将管理用户名、加盐后的密码哈希、订阅选择和页面设置保存到 `data/.env`，容器启动时自动读取。文件权限为 `0600`。登录后可在“设置 → 修改管理密码”更换密码，新密码立即生效并在重启后保留。
+下次需要登录时，使用初始化时设置的管理账号。
 
-也可以用项目根目录的 `.env` 预设管理账号和订阅。
+![Clash Portal 登录页面](screenshots/login.jpg)
 
-```dotenv
-PORTAL_ADMIN_USERNAME=admin
-PORTAL_ADMIN_KEY=你的密码
-SUBSCR_URLS=https://example.com/subscription.yaml
+</details>
+
+## 日常操作
+
+| 想做什么 | 在哪里操作 |
+| --- | --- |
+| 导入、切换或替换订阅 | 打开 **订阅**，导入链接或上传 YAML。点击 **设为当前** 后保存以切换。 |
+| 更新当前链接订阅 | 在控制台的 **订阅状态** 点击 **更新订阅**。自动更新及其间隔在 **设置 → 订阅更新** 配置。 |
+| 给代理连接加认证 | 在 **设置 → 代理认证** 填写用户名和密码，再点击 **保存设置**。 |
+| 修改管理密码 | 在 **设置 → 修改管理密码** 填写当前密码和新密码，点击 **修改密码** 单独提交。 |
+| 查看项目和内核版本 | 打开 **关于**。 |
+| 检查连接延时 | 在 **连接延时检测** 切换 **容器直连** 或 **代理规则**，然后重新检测。 |
+
+<details>
+<summary>查看订阅管理、设置和关于截图</summary>
+
+![订阅管理弹窗，展示链接导入、本地 YAML 上传和已保存订阅](screenshots/dialogs/subscriptions-desktop-light.png)
+
+![设置弹窗，展示订阅更新、代理认证和修改管理密码](screenshots/dialogs/settings-desktop-light.png)
+
+![关于弹窗，展示项目版本、Mihomo 内核版本及仓库链接](screenshots/dialogs/about-desktop-light.png)
+
+</details>
+
+本地文件支持 UTF-8 编码的 `.yaml` / `.yml`，最大 16 MiB，保存在 `data/local-subscriptions/`。定时更新只下载链接订阅。本地配置通过订阅列表里的 **替换文件** 更新，订阅列表会显示导入时间。流量只有在链接订阅提供相关数据时才显示。
+
+订阅更新会先下载并校验新配置，再尝试热加载。应用失败时保留原有可用配置和订阅选择。镜像在构建时已预置 geodata，容器也支持在后台更新这些文件。
+
+## 端口与远程访问
+
+| 默认端口 | 用途 |
+| --- | --- |
+| `9090` | Portal、三个 Web 面板和经 Portal 转发的 Clash API |
+| `7890` | HTTP 代理 |
+| `7891` | SOCKS5 代理 |
+| `7892` | TPROXY 端口 |
+| `7893` | Mixed 代理 |
+| `9097` | 容器内 Mihomo API，默认仅监听容器回环地址，Compose 未映射 |
+
+远程管理时，将 HTTPS 反向代理或穿透服务指向部署主机的 `9090`，并开启 WebSocket 转发。内置面板使用当前访问的域名、协议和端口连接 API，连接与日志的 WebSocket 也走同一个入口。
+
+如需直接连接内核 API，在项目根目录的 `.env` 设置 `DASH_BIND_ADDRESS=0.0.0.0`，取消 Compose 中 `127.0.0.1:9097:9097` 的注释，再重新运行 `docker compose up -d`。直连时使用 API 密钥认证。容器内部的 `PORTAL_PORT` 和 `DASH_PORT` 须使用不同的端口。
+
+## 配置与数据
+
+| 配置项 | 用途与默认值 |
+| --- | --- |
+| `PORTAL_ADMIN_USERNAME` / `PORTAL_ADMIN_KEY` | 可选的预设管理账号。预设密码但未指定用户名时使用 `admin`。 |
+| `SUBSCR_URLS` | 可选的首次启动订阅链接，多个地址以逗号分隔。已有保存的订阅优先。 |
+| `CLASH_SECRET` | 可选的 Clash API 密钥，默认由容器生成并持久化。 |
+| `DASH_BIND_ADDRESS` | Mihomo API 监听地址，默认 `127.0.0.1`。 |
+| `UPDATE_INTERVAL` | 容器默认自动更新间隔，`43200` 秒（12 小时）。 |
+| `SUBSCR_CONNECT_TIMEOUT` | 下载订阅的连接超时，默认 15 秒。 |
+| `SUBSCR_VALIDATE_MAX_TIME` / `SUBSCR_DOWNLOAD_MAX_TIME` | 导入校验和更新下载的单次下载超时，默认各 120 秒。 |
+| `CONFIG_VALIDATE_MAX_TIME` / `SUBSCR_MAX_BYTES` | 配置校验超时和链接订阅下载上限，默认 90 秒和 16 MiB。 |
+
+预设账号、订阅和 API 密钥可参考 [.env.example](.env.example)。容器运行参数需要通过 Compose 的 `environment` 传入，映射及示例见 [docker-compose.yml](docker-compose.yml)。
+
+**三种凭据分别管理。** Portal 管理账号用于登录和管理订阅，密码以加盐哈希保存。Clash API 密钥用于内核 API，默认保存在 `data/portal.json`。代理认证用于 HTTP、SOCKS5 和 Mixed 代理，启用时须填写两项，两项都留空并保存即可关闭。TPROXY 不使用这组凭据。通过 Portal 保存的代理认证优先于订阅原有的代理认证设置。
+
+管理账号、订阅、配置、geodata 和运行状态都在 **`data/`** 下。备份或迁移时保留整个目录。
+
+<details>
+<summary>通过环境变量重置密码或轮换 API 密钥</summary>
+
+在项目根目录的 `.env` 中设置新的 `PORTAL_ADMIN_KEY`，再执行 `docker compose up -d`，可重置管理密码。
+
+轮换 Clash API 密钥时，设置新的 `CLASH_SECRET`（可用 `openssl rand -hex 24` 生成），再执行 `docker compose up -d --force-recreate`。从 Portal 重新打开面板即可使用当前密钥。
+
+</details>
+
+## 升级
+
+备份 `data/` 后，在当前部署目录更新 Compose 使用的镜像。
+
+```bash
+docker compose pull
+docker compose up -d
 ```
 
-未指定用户名时使用 `admin`。已保存的订阅优先于 `SUBSCR_URLS`，容器会验证订阅并在服务启动后开放控制台。需要通过环境变量重置管理密码时，使用新的 `PORTAL_ADMIN_KEY` 值并执行 `docker compose up -d`。
+旧版自设的管理密码会继续生效，用户名为 `admin`。曾经免登录或使用自动生成密码的实例，升级后需要在初始化页设置自己的管理账号。可用的订阅会沿用。旧版 `PORTAL_AUTH_ENABLED=false` 已失效。免登录实例升级时，自动管理的 API 密钥会更新一次，显式设置的 `CLASH_SECRET` 会保留。
 
-## API 密钥
+<details>
+<summary>旧订阅的客户端指纹兼容</summary>
 
-API 密钥与管理密码独立，默认自动生成并保存到 `data/portal.json`。从旧版免登录模式升级时，自动管理的密钥会更新一次；后续重启保持不变。面板从 Portal 重新打开即可使用当前密钥。
+生成运行配置时，旧版 `global-client-fingerprint` 会迁移到支持该选项的节点，保留节点显式设置（包括 `none`）。完整配置和内置模板均支持。HTTP、file 和 inline 类型的 `proxy-providers` 通过 `override-expr` 补齐缺少的指纹，已有覆写表达式优先。原始订阅缓存保持原样。自定义旧内核时请确认它支持 `override-expr`，项目固定版本见 [core/mihomo-version.txt](core/mihomo-version.txt)。
 
-需要手动轮换时，在 `.env` 中将 `CLASH_SECRET` 设置为新值（可用 `openssl rand -hex 24` 生成），然后运行 `docker compose up -d --force-recreate`。显式设置的 `CLASH_SECRET` 优先于自动管理的密钥，升级时也会保留。修改管理密码不会更改 API 密钥，二者需要分别管理。
+启用内置模板时，**🚀 默认代理**优先选择 **⚡ 自动选择**（全部节点自动测速），其次是香港等地区分组。已有的模板设置和手动选择会保留。
 
-## 默认端口
+</details>
 
-- `9090`: Portal、全部 Dashboard 和 Clash API 的统一入口
-- `9097`: 容器内 Clash API 端口（默认仅监听回环地址，不映射）
-- `7890`: HTTP 代理
-- `7891`: SOCKS5 代理
-- `7892`: TPROXY
-- `7893`: MIXED
+## 常见问题
 
-如需调整，可在 `docker-compose.yml` 中修改环境变量。
+- **打不开 Portal。** 在部署目录执行 `docker compose ps` 和 `docker compose logs --tail=100 clash`，确认容器状态和主机端口映射。从其他设备访问时使用部署主机的地址。
+- **初始化提示配置校验失败。** 检查链接能否从部署环境下载，以及内容是否为 Clash YAML。只有节点列表时启用内置规则模板。上传文件时检查扩展名、编码和大小。
+- **面板能打开，但连接或日志不刷新。** 从 Portal 重新打开面板，使用反向代理或穿透服务时检查 WebSocket 转发。
+- **检测到的延时与本机不同。** 容器直连和代理规则检测都在容器内执行，后者经 Mixed 端口按当前规则发起请求。
 
-外网只需穿透 Web 端口 `9090`。从 Portal 点击 Metacubexd、Zashboard 或 Yacd，面板页面、API、连接和日志的 WebSocket 都使用当前访问的域名、协议和端口；支持穿透服务将外部 HTTPS 域名或其他端口映射到容器的 `9090`。无需额外穿透 `9097`，也无需手动填写控制地址或 API 密钥。穿透服务需支持 WebSocket。
+## 构建与维护
 
-内部 `DASH_PORT` 与 `PORTAL_PORT` 仍应使用不同端口。需要直接连接内核 API 时，在 `.env` 中设置 `DASH_BIND_ADDRESS=0.0.0.0`，并取消 Compose 中 `127.0.0.1:9097:9097` 的注释；直连仍使用 API 密钥。通过 Portal 访问面板和 API 无需更改这些设置。公网管理入口使用 HTTPS。
-
-## 可选：代理用户名和密码
-
-打开 Portal 的“设置 → 代理认证”，填写代理用户名和密码并保存，即可为 HTTP、SOCKS 和 Mixed 代理开启认证。两项都留空并保存，则无需认证；只填写其中一项会提示补全。
-
-代理认证与 Portal 管理密码、Clash API 密钥相互独立，不适用于 TPROXY 透明代理。设置随 Portal 配置保存到 `data/.env`，应用失败会恢复原认证设置，重启、切换订阅和更新订阅后继续生效。开启代理认证后，内置代理规则延迟检测也会携带认证信息。
-
-Portal 保存的代理认证设置优先于订阅中的 `authentication` 和 `skip-auth-prefixes`。升级前已在订阅中设置认证、且尚未通过 Portal 保存代理认证字段时，会保留订阅的原设置。
-
-## 镜像来源
-
-默认 `docker-compose.yml` 使用：
-
-- `ghcr.nju.edu.cn/bctjo/docker-clash:latest`
-
-## 为什么更稳定
-
-容器启动与更新流程包含以下保护机制：
-
-- 内置 geodata 初始化后可在后台更新（`Country.mmdb` / `GeoSite.dat` / `GeoIP.dat`）
-- 构建阶段内置 geodata，弱网首启可直接使用镜像内文件
-- 首次启动 geodata 下载失败/超时会自动熔断本次自动更新，避免反复重试阻塞
-- 配置应用前执行 `clash -t` 校验
-- 下载失败自动重试与多源回退
-- 新订阅下载到临时目录，下载成功且配置校验通过后再应用
-- 配置通过 `/configs` 热加载，后台任务继续运行
-- 配置应用失败恢复原配置和选择；失败下载不会覆盖可用缓存
-- 订阅服务器离线时，重启优先保留并使用上一次可用缓存
-- 后台任务按请求编号返回结果，多个请求不会相互覆盖
-- Docker 健康检查覆盖 Portal、后台任务和 mihomo API
-
-这可以明显降低“配置更新后服务起不来”的概率。
-
-## 常用配置项
-
-你通常只需要关心这几个：
-
-- `SUBSCR_URLS`: 首次初始化的订阅地址（逗号分隔）
-- `SUBSCR_VALIDATE_MAX_TIME`: 导入订阅时单次校验下载超时（秒，默认 120）
-- `SUBSCR_DOWNLOAD_MAX_TIME`: 更新订阅时单次下载超时（秒，默认 120）
-- `SUBSCR_CONNECT_TIMEOUT`: 订阅下载连接超时（秒，默认 15）
-- `PORTAL_ADMIN_USERNAME`: 可选的管理用户名，与预设密码一起使用
-- `PORTAL_ADMIN_KEY`: 可选的预设管理密码；留空时可在初始化页设置
-- `CONFIG_VALIDATE_MAX_TIME`: 配置校验超时（秒，默认 90）
-- `SUBSCR_MAX_BYTES`: 订阅最大下载大小（字节，默认 16 MiB）
-- `UPDATE_INTERVAL`: 自动更新间隔（秒，默认 43200）
-- `CLASH_SECRET`: API 密钥（留空自动管理；设置新值并重建容器可轮换）
-- `DASH_BIND_ADDRESS`: 核心 API 监听地址（默认 `127.0.0.1`；显式直连时可设为 `0.0.0.0`）
-
-更多配置可查看 `docker-compose.yml`。
-
-管理密码保护管理操作、连接密钥、代理认证设置及订阅信息。面板 API 继续由 Clash API 密钥认证，首页自动连接但不展示该密钥。HTTP / SOCKS / Mixed 代理自身的账号密码在“设置 → 代理认证”中配置。
-
-延迟检测有两种模式：“容器直连检测”从容器发起连接，“代理规则检测”通过 Mixed 端口按当前规则访问各个目标；这两种检测都不代表浏览器所在设备的网络。
-
-## 数据持久化
-
-项目将运行数据保存在 `data/` 目录，包含：
-
-- 运行配置与原始订阅配置
-- geodata 文件
-- Portal 配置文件 `data/.env`、订阅缓存和运行状态
-
-迁移或备份时保留该目录即可。
-
-## 自动发布（mihomo 更新驱动）
-
-- Workflow `Auto Release On Mihomo Update` 会每 6 小时检查一次 `MetaCubeX/mihomo` 最新版本。
-- 若有更新，先准备版本提交并构建、发布多架构镜像；成功后才把内核版本提交和项目 tag 一起推送（补丁位自动加 1，例如 `v1.0.7 -> v1.0.8`）。构建失败时，下次检查继续重试。
-- 自动发布和手动发布共用构建步骤及发布锁，避免并发覆盖 `latest`。
-- 自动流程直接创建正式 Release，并在后续运行补建中断的发布，不依赖机器人推送 tag 触发另一份工作流。内核更新提交会注明前后版本。
-- 版本查询带认证、超时和重试；镜像记录实际版本提交的 SHA。
-- `Runtime checks` 工作流在 main 更新和 PR 时执行配置测试及隔离容器的更新、回滚、重启测试。
-- 发布构建时会优先读取 `core/mihomo-version.txt`，确保镜像内核版本可追溯。
-
-项目功能更新使用新的版本 tag 发布，例如 `v1.1.0`；仅推送 main 会运行检查，不会发布镜像。tag 发布会更新对应版本的镜像和 `latest`，同时创建包含源码包与版本说明的正式 Release。功能变更和升级说明记录在 [CHANGELOG.md](CHANGELOG.md)。
-
-提交说明按改动类型区分：`🐞 fix` 用于缺陷修复，`✨ feat` 用于功能，`🚀 ci(release)` 用于发布，`🔧 chore(core)` 用于内核升级，`📝 docs` 用于文档，`✅ test` 用于测试。每条说明描述具体变化，避免把多类改动都写成同一句话。
-
-## 本地构建（可选）
-
-从源码构建镜像，构建时会自动下载 `core/mihomo-version.txt` 指定的 mihomo 内核。
+从源码构建时，Docker 会按 [core/mihomo-version.txt](core/mihomo-version.txt) 下载 Mihomo。构建后将 Compose 的 `image` 改成自建镜像标签即可部署。
 
 ```bash
 docker build -t clash-meta:local .
 ```
 
-如需临时使用其他内核版本，可传入 `--build-arg MIHOMO_VERSION=v1.19.20`。部署自建镜像时，将 Compose 中的 `image` 改为所构建的镜像标签。
-
-## 本地验证
-
-测试使用临时数据目录和本地订阅服务器，不接触 `data/` 中的实际订阅：
+<details>
+<summary>查看本地验证与发布流程</summary>
 
 ```bash
 docker build -t clash-meta-review:local .
 docker run --rm --entrypoint python3 -v "$PWD:/src:ro" -w /src clash-meta-review:local -m unittest discover -s tests -p 'test_*.py' -v
 python3 tests/integration.py
+python3 tests/auth_integration.py
 node tests/check_frontend.cjs
 ```
 
-只验证配置和指纹兼容性时，本机安装 PyYAML 后可运行：
+隔离容器测试使用临时数据和本地订阅服务。可选浏览器测试需要 Playwright 和 Chromium，通过 `RUN_BROWSER_TESTS=1 python3 tests/integration.py` 启用。本机运行指纹测试时可用 `MIHOMO_BIN` 指定 Mihomo 二进制路径。
 
-```bash
-python3 -m unittest discover -s tests -p 'test_config_tool.py' -v
-MIHOMO_BIN=/path/to/mihomo python3 -m unittest discover -s tests -p 'test_fingerprint_runtime.py' -v
-```
+构建时可用 `--build-arg MIHOMO_VERSION=<版本>` 覆盖固定内核版本，或用 `--build-arg APT_MIRROR=mirrors.ustc.edu.cn` 更换 Debian 软件源。
 
-指纹运行测试使用本地模拟端点捕获 VLESS + REALITY 的 TLS ClientHello，对比继承值、节点显式值及 provider 覆写和更新后的实际指纹；不使用真实订阅，也不代表真实节点的端到端连通性。容器中的配置测试会自动使用 `/usr/bin/clash` 运行此测试；本机未提供内核时跳过。
+[Runtime checks](.github/workflows/checks.yml) 验证配置、更新、回滚和重启。[自动发布流程](.github/workflows/auto-release-mihomo.yml) 每 6 小时检查 Mihomo 更新，镜像构建和发布成功后推送版本提交与标签。[标签发布流程](.github/workflows/release-ghcr.yml) 发布多架构镜像及正式 Release。仅推送 `main` 会触发检查。版本变更见 [CHANGELOG.md](CHANGELOG.md)。
 
-可选浏览器测试需要 Playwright 及 Chromium：`RUN_BROWSER_TESTS=1 python3 tests/integration.py`。
+提交说明按类型使用 `🐞 fix`、`✨ feat`、`🚀 ci(release)`、`🔧 chore(core)`、`📝 docs` 或 `✅ test`，每条说明写清具体变化。
 
-本地构建需要更换 APT 源时，可添加 `--build-arg APT_MIRROR=mirrors.ustc.edu.cn`；默认使用 Debian 官方源。
+</details>
