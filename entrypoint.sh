@@ -4,6 +4,7 @@ set -e
 # ========= 基础端口配置 & 变量 =========
 PORTAL_PORT=${PORTAL_PORT:-9090}
 DASH_PORT=${DASH_PORT:-9097}
+DASH_BIND_ADDRESS=${DASH_BIND_ADDRESS:-127.0.0.1}
 CLASH_HTTP_PORT=${CLASH_HTTP_PORT:-7890}
 CLASH_SOCKS_PORT=${CLASH_SOCKS_PORT:-7891}
 CLASH_TPROXY_PORT=${CLASH_TPROXY_PORT:-7892}
@@ -16,11 +17,11 @@ SUBSCR_DOWNLOAD_MAX_TIME=${SUBSCR_DOWNLOAD_MAX_TIME:-120}
 SUBSCR_RETRY=${SUBSCR_RETRY:-2}
 SUBSCR_RETRY_DELAY=${SUBSCR_RETRY_DELAY:-2}
 SUBSCR_MAX_BYTES=${SUBSCR_MAX_BYTES:-16777216}
-PORTAL_ADMIN_KEY=${PORTAL_ADMIN_KEY:-}
-PORTAL_AUTH_ENABLED=${PORTAL_AUTH_ENABLED:-false}
 CONFIG_VALIDATE_MAX_TIME=${CONFIG_VALIDATE_MAX_TIME:-90}
 PORTAL_TASK_DIR="/opt/portal/tasks"
 PORTAL_REQUEST_DIR="/opt/portal/requests"
+PORTAL_SETUP_DIR="/opt/portal/setup"
+PORTAL_READY_FILE="/tmp/portal-setup-complete"
 # 更新间隔，默认 12 小时 (43200 秒)
 UPDATE_INTERVAL=${UPDATE_INTERVAL:-43200}
 
@@ -53,6 +54,7 @@ SETTINGS_PUBLIC="/opt/portal/settings.json"
 SUBSCRIPTIONS_FILE="$CONFIG_DIR/subscriptions.json"
 SUBSCRIPTIONS_PUBLIC="/opt/portal/subscriptions.json"
 SUBS_CACHE_DIR="$CONFIG_DIR/proxies"
+LOCAL_SUBS_DIR="$CONFIG_DIR/local-subscriptions"
 PORTAL_AUTH_FILE="/etc/nginx/.portal_htpasswd"
 PORTAL_UPDATE_TRIGGER="/opt/portal/update"
 PORTAL_LATENCY_BROWSER_TRIGGER="/opt/portal/latency-browser-refresh"
@@ -70,14 +72,14 @@ FIRST_START_MARKER="$CONFIG_DIR/.first-start.done"
 
 mkdir -p "$CONFIG_DIR" "$TMP_DIR"
 mkdir -p "$SUBS_CACHE_DIR"
+mkdir -m 700 -p "$LOCAL_SUBS_DIR"
 
 # ========= 函数：日志 =========
 validate_environment() {
     local name value
-    case "${PORTAL_AUTH_ENABLED,,}" in
-        1|true|yes|on) PORTAL_AUTH_ENABLED=true ;;
-        0|false|no|off) PORTAL_AUTH_ENABLED=false ;;
-        *) log "ERROR: PORTAL_AUTH_ENABLED must be true or false."; return 1 ;;
+    case "$DASH_BIND_ADDRESS" in
+        127.0.0.1|0.0.0.0) ;;
+        *) log "ERROR: DASH_BIND_ADDRESS must be 127.0.0.1 or 0.0.0.0."; return 1 ;;
     esac
     local -A used_ports=()
     for name in PORTAL_PORT DASH_PORT CLASH_HTTP_PORT CLASH_SOCKS_PORT CLASH_TPROXY_PORT CLASH_MIXED_PORT; do
@@ -99,8 +101,8 @@ validate_environment() {
             return 1
         fi
     done
-    if [[ "$CLASH_SECRET" == *$'\n'* || "$CLASH_SECRET" == *$'\r'* || "$PORTAL_ADMIN_KEY" == *$'\n'* || "$PORTAL_ADMIN_KEY" == *$'\r'* ]]; then
-        log "ERROR: Passwords cannot contain line breaks."
+    if [[ "$CLASH_SECRET" == *$'\n'* || "$CLASH_SECRET" == *$'\r'* ]]; then
+        log "ERROR: CLASH_SECRET cannot contain line breaks."
         return 1
     fi
 }
@@ -122,32 +124,13 @@ curl_subscription() {
     local output_file="$3"
     local max_time="$4"
 
-    if [[ -n "$SUBSCR_UA" ]]; then
-        curl -fsSL \
-            --proto '=http,https' --proto-redir '=http,https' \
-            --max-filesize "$SUBSCR_MAX_BYTES" \
-            --retry "$SUBSCR_RETRY" \
-            --retry-delay "$SUBSCR_RETRY_DELAY" \
-            --retry-max-time "$max_time" \
-            --connect-timeout "$SUBSCR_CONNECT_TIMEOUT" \
-            --max-time "$max_time" \
-            -A "$SUBSCR_UA" \
-            -D "$header_file" \
-            "$url" \
-            -o "$output_file"
-    else
-        curl -fsSL \
-            --proto '=http,https' --proto-redir '=http,https' \
-            --max-filesize "$SUBSCR_MAX_BYTES" \
-            --retry "$SUBSCR_RETRY" \
-            --retry-delay "$SUBSCR_RETRY_DELAY" \
-            --retry-max-time "$max_time" \
-            --connect-timeout "$SUBSCR_CONNECT_TIMEOUT" \
-            --max-time "$max_time" \
-            -D "$header_file" \
-            "$url" \
-            -o "$output_file"
-    fi
+    local -a user_agent=()
+    [[ -z "$SUBSCR_UA" ]] || user_agent=(-A "$SUBSCR_UA")
+    curl -fsSL --globoff --proto '=http,https' --proto-redir '=http,https' \
+        --max-filesize "$SUBSCR_MAX_BYTES" --retry "$SUBSCR_RETRY" \
+        --retry-delay "$SUBSCR_RETRY_DELAY" --retry-max-time "$max_time" \
+        --connect-timeout "$SUBSCR_CONNECT_TIMEOUT" --max-time "$max_time" \
+        "${user_agent[@]}" -D "$header_file" -o "$output_file" -- "$url"
 }
 
 # ========= 函数：下载文件（带超时/重试/过期检查） =========
@@ -155,31 +138,34 @@ download_with_fallback() {
     local file="$1"
     local label="$2"
     shift 2
-    local url
+    local url temporary
     local max_time=60
 
     if [[ "$label" == "GeoIP.dat" ]]; then
         max_time=180
     fi
 
+    temporary=$(mktemp "${file}.XXXXXX") || return 1
     for url in "$@"; do
         if [[ -z "$url" ]]; then
             continue
         fi
         log "Downloading $label from: $url"
-        if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time "$max_time" "$url" -o "$file.tmp"; then
-            if [[ ! -s "$file.tmp" ]]; then
+        if curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --max-time "$max_time" "$url" -o "$temporary"; then
+            if [[ ! -s "$temporary" ]]; then
                 log "WARNING: $label download empty from $url."
-                rm -f "$file.tmp"
                 continue
             fi
-            mv "$file.tmp" "$file"
+            if ! mv "$temporary" "$file"; then
+                rm -f "$temporary"
+                return 1
+            fi
             log "$label updated."
             return 0
         fi
     done
     log "WARNING: Failed to download $label from all sources."
-    rm -f "$file.tmp"
+    rm -f "$temporary"
     return 1
 }
 
@@ -204,6 +190,7 @@ download_if_stale() {
 }
 
 is_geodata_auto_update_enabled() {
+    [[ ! -f /tmp/portal-geodata-disabled ]] || return 1
     case "${GEODATA_AUTO_UPDATE,,}" in
         1|true|yes|on)
             return 0
@@ -249,27 +236,21 @@ generate_secret() {
 
 ensure_secret() {
     if [[ -z "$CLASH_SECRET" && -f "$PORTAL_STATE_FILE" ]]; then
-        CLASH_SECRET=$(jq -r '.secret // empty' "$PORTAL_STATE_FILE" 2>/dev/null || true)
+        # Reuse authenticated state, but issue a fresh key when upgrading legacy
+        # state or enabling authentication after an explicitly open deployment.
+        if jq -e '.credentialVersion == 1 and .authEnabled == true' "$PORTAL_STATE_FILE" >/dev/null 2>&1; then
+            CLASH_SECRET=$(jq -r '.secret // empty' "$PORTAL_STATE_FILE" 2>/dev/null || true)
+        fi
     fi
     [[ -n "$CLASH_SECRET" ]] || CLASH_SECRET=$(generate_secret)
-    (umask 077; jq -n --arg secret "$CLASH_SECRET" '{secret:$secret}' > "$PORTAL_STATE_FILE.tmp")
+    (umask 077; jq -n --arg secret "$CLASH_SECRET" \
+        '{secret:$secret,authEnabled:true,credentialVersion:1}' > "$PORTAL_STATE_FILE.tmp")
     chmod 600 "$PORTAL_STATE_FILE.tmp"
     mv "$PORTAL_STATE_FILE.tmp" "$PORTAL_STATE_FILE"
 }
 
-ensure_portal_admin_key() {
-    local result source
-    if [[ "$PORTAL_AUTH_ENABLED" == false ]]; then
-        PORTAL_ADMIN_KEY=""
-        return 0
-    fi
-    result=$(PORTAL_ADMIN_KEY="$PORTAL_ADMIN_KEY" python3 /opt/scripts/password_tool.py initialize \
-        --directory "$CONFIG_DIR" --auth-file "$PORTAL_AUTH_FILE") || { log "ERROR: Unable to initialize Portal password."; return 1; }
-    PORTAL_ADMIN_KEY=$(printf '%s' "$result" | jq -r '.password')
-    source=$(printf '%s' "$result" | jq -r '.source')
-    if [[ "$source" == generated ]]; then
-        log "Portal 用户名: admin；自动生成密码: $PORTAL_ADMIN_KEY"
-    fi
+portal_config() {
+    python3 /opt/scripts/password_tool.py "$@" --directory "$CONFIG_DIR" --auth-file "$PORTAL_AUTH_FILE"
 }
 
 # ========= 函数：生成 Portal 配置 =========
@@ -301,9 +282,8 @@ write_portal_config() {
         --arg httpPort "$CLASH_HTTP_PORT" --arg socksPort "$CLASH_SOCKS_PORT" \
         --arg tproxyPort "$CLASH_TPROXY_PORT" --arg mixedPort "$CLASH_MIXED_PORT" \
         --arg updateIntervalSec "$UPDATE_INTERVAL" \
-        --argjson adminAuthEnabled "$PORTAL_AUTH_ENABLED" \
         '{dashPort:$dashPort,portalPort:$portalPort,httpPort:$httpPort,socksPort:$socksPort,
-          tproxyPort:$tproxyPort,mixedPort:$mixedPort,updateIntervalSec:$updateIntervalSec,adminAuthEnabled:$adminAuthEnabled}')
+          tproxyPort:$tproxyPort,mixedPort:$mixedPort,updateIntervalSec:$updateIntervalSec,adminAuthEnabled:true}')
     printf 'window.__PORTAL_CONFIG__ = %s;\n' "$json" > "$PORTAL_CONFIG"
     jq -n --arg secret "$CLASH_SECRET" '{secret:$secret}' > /opt/portal/connection.json
     ensure_public_file_readable /opt/portal/connection.json
@@ -344,7 +324,8 @@ write_subscriptions_file() {
 }
 
 init_subscriptions() {
-    if [[ -f "$SUBSCRIPTIONS_FILE" ]]; then
+    if [[ -f "$SUBSCRIPTIONS_FILE" ]] && { [[ -z "$SUBSCR_URLS" ]] ||
+        jq -e '(.urls // .items // []) | length > 0' "$SUBSCRIPTIONS_FILE" >/dev/null 2>&1; }; then
         cp "$SUBSCRIPTIONS_FILE" "$SUBSCRIPTIONS_PUBLIC"
         ensure_public_file_readable "$SUBSCRIPTIONS_PUBLIC"
         return
@@ -400,7 +381,7 @@ load_subscriptions() {
         trap 'rm -f "$snapshot"; trap - RETURN' RETURN
         if ! jq -e 'def urls: .urls // [(.items // [])[] | .url];
             type=="object" and (urls|type)=="array" and (urls|length)>0 and
-            all(urls[]; type=="string" and test("^https?://")) and ((.active // 0)|type)=="number"' "$source" >/dev/null 2>&1; then
+            all(urls[]; type=="string" and test("^https?://|^local:[0-9a-f]{64}$")) and ((.active // 0)|type)=="number"' "$source" >/dev/null 2>&1; then
             return 1
         fi
     elif [[ -f "$SUBSCRIPTIONS_FILE" ]]; then
@@ -426,7 +407,7 @@ load_subscriptions() {
     for url in "${parsed_urls[@]}"; do
         url="$(printf '%s' "$url" | tr -d '\r\n')"
         [[ -n "$url" ]] || continue
-        if [[ "$url" =~ ^https?:// ]]; then
+        if [[ "$url" =~ ^https?:// || "$url" =~ ^local:[0-9a-f]{64}$ ]]; then
             cleaned_urls+=("$url")
         fi
     done
@@ -553,6 +534,10 @@ subscription_cache_file_by_index() {
     if [[ -z "$url" ]]; then
         return 1
     fi
+    if [[ "$url" =~ ^local:[0-9a-f]{64}$ ]]; then
+        printf '%s/%s.yaml' "$LOCAL_SUBS_DIR" "${url#local:}"
+        return 0
+    fi
     hash=$(printf '%s' "$url" | md5sum | awk '{print $1}')
     printf '%s/%s' "$SUBS_CACHE_DIR" "$hash"
 }
@@ -565,21 +550,6 @@ subscriptions_signature() {
         raw="${raw}${url}||"
     done
     printf '%s' "$raw" | md5sum | awk '{print $1}'
-}
-
-wait_for_subscriptions() {
-    if load_subscriptions; then
-        return 0
-    fi
-    log "No subscriptions configured. Waiting for portal input..."
-    while true; do
-        sleep 2
-        if [[ -s "$SETTINGS_PUBLIC" ]]; then cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"; fi
-        if load_subscriptions; then
-            log "Subscriptions configured. Initializing..."
-            return 0
-        fi
-    done
 }
 
 write_portal_status() {
@@ -852,6 +822,28 @@ validate_subscription_url() {
     return 0
 }
 
+validate_subscription_upload() (
+    local request="$1" request_id="$2" stage parsed url name builtin
+    stage=$(mktemp -d "$LOCAL_SUBS_DIR/.upload.XXXXXX") || return 1
+    trap 'rm -rf "$stage"' EXIT
+    if ! parsed=$(python3 /opt/scripts/subscription_upload.py "$stage/source" < "$request"); then
+        write_subscription_validate_result false "" "" "$(jq -r '.message' <<< "$parsed")" "$request_id"
+        return 1
+    fi
+    IFS='|' read -r _ _ builtin <<< "$(read_settings)"
+    if ! generate_config "$stage/source" "$stage/config.yaml" "$builtin" || ! validate_generated_config "$stage/config.yaml"; then
+        write_subscription_validate_result false "" "" "YAML 配置校验失败，请检查文件内容和规则模板设置。" "$request_id"
+        return 1
+    fi
+    url=$(jq -r '.url' <<< "$parsed")
+    name=$(jq -r '.name' <<< "$parsed")
+    if ! mv "$stage/source" "$LOCAL_SUBS_DIR/${url#local:}.yaml"; then
+        write_subscription_validate_result false "" "" "无法保存 YAML 文件。" "$request_id"
+        return 1
+    fi
+    write_subscription_validate_result true "$url" "$name" "YAML 文件校验通过。" "$request_id"
+)
+
 update_subscription_info_from_header() {
     local header_file="$1"
     local idx="${2:-}"
@@ -1053,18 +1045,6 @@ refresh_latency_cache() (
 # ========= 函数：处理 Portal 触发更新 =========
 watch_portal_update() {
     while true; do
-        if [[ ! -f /tmp/portal-core-started && -s "$SETTINGS_PUBLIC" ]]; then
-            local settings_error
-            if settings_error=$(python3 /opt/scripts/config_tool.py --validate-settings "$SETTINGS_PUBLIC" 2>&1); then
-                cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"
-                chmod 600 "$SETTINGS_FILE"
-                write_task_status "$(jq -r '.requestId // empty' "$SETTINGS_PUBLIC")" success "设置已保存"
-            else
-                write_task_status "$(jq -r '.requestId // empty' "$SETTINGS_PUBLIC" 2>/dev/null || true)" failed "$settings_error"
-                cp "$SETTINGS_FILE" "$SETTINGS_PUBLIC"
-                ensure_public_file_readable "$SETTINGS_PUBLIC"
-            fi
-        fi
         local request kind request_id request_body claimed
         for request in "$PORTAL_REQUEST_DIR"/*/*; do
             [[ -f "$request" ]] || continue
@@ -1073,6 +1053,11 @@ watch_portal_update() {
             [[ "$request_id" =~ ^[A-Za-z0-9-]{1,80}$ ]] || { rm -f "$request"; continue; }
             claimed="$TMP_DIR/request-$request_id"
             mv "$request" "$claimed" || continue
+            if [[ "$kind" == uploads ]]; then
+                validate_subscription_upload "$claimed" "$request_id" || true
+                rm -f "$claimed"
+                continue
+            fi
             request_body=$(cat "$claimed")
             rm -f "$claimed"
             case "$kind" in
@@ -1089,8 +1074,7 @@ watch_portal_update() {
                     ;;
                 password)
                     local password_result
-                    password_result=$(printf '%s' "$request_body" | python3 /opt/scripts/password_tool.py change \
-                        --directory "$CONFIG_DIR" --auth-file "$PORTAL_AUTH_FILE" --enabled "$PORTAL_AUTH_ENABLED") || true
+                    password_result=$(printf '%s' "$request_body" | portal_config change) || true
                     if printf '%s' "$password_result" | jq -e '.ok == true' >/dev/null 2>&1; then
                         write_task_status "$request_id" success "密码已修改并保存。"
                     else
@@ -1178,7 +1162,7 @@ generate_config() {
         --secret-file "$PORTAL_STATE_FILE" --settings-file "$SETTINGS_PUBLIC" --ports "$(jq -nc \
           --argjson port "$CLASH_HTTP_PORT" --argjson socks "$CLASH_SOCKS_PORT" \
           --argjson mixed "$CLASH_MIXED_PORT" --argjson tproxy "$CLASH_TPROXY_PORT" \
-          --arg controller "0.0.0.0:$DASH_PORT" \
+          --arg controller "$DASH_BIND_ADDRESS:$DASH_PORT" \
           '{port:$port,"socks-port":$socks,"mixed-port":$mixed,"tproxy-port":$tproxy,"external-controller":$controller}')" \
         "${args[@]}"
 }
@@ -1213,6 +1197,8 @@ auto_update_loop() {
             last_subs_signature=$(subscriptions_signature)
         fi
     fi
+
+    publish_portal_ready
 
     while true; do
         if [[ -f "$SETTINGS_PUBLIC" ]]; then
@@ -1250,7 +1236,11 @@ auto_update_loop() {
                         log "WARNING: Failed to apply settings immediately."
                     fi
                 else
-                    write_task_status "$settings_request_id" success "设置已保存"
+                    if portal_config sync --section settings >/dev/null; then
+                        write_task_status "$settings_request_id" success "设置已保存"
+                    else
+                        write_task_status "$settings_request_id" failed "无法保存设置，请检查数据目录权限"
+                    fi
                 fi
             fi
         fi
@@ -1275,8 +1265,11 @@ auto_update_loop() {
                         fi
                     else
                         if [[ "$SUBS_SOURCE_HASH" == "$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)" ]]; then
-                            write_subscriptions_state "$SUBSCRIPTIONS_FILE" || true
-                            write_task_status "$SUBS_REQUEST_ID" success "订阅已保存"
+                            if write_subscriptions_state "$SUBSCRIPTIONS_FILE" && portal_config sync --section subscriptions >/dev/null; then
+                                write_task_status "$SUBS_REQUEST_ID" success "订阅已保存"
+                            else
+                                write_task_status "$SUBS_REQUEST_ID" failed "无法保存订阅，请重试"
+                            fi
                         fi
                     fi
                 else
@@ -1313,21 +1306,18 @@ auto_update_loop() {
 
 # ========= 函数：启动快捷入口页面 =========
 start_portal() {
-    ensure_secret
-    ensure_portal_admin_key
-    mkdir -p "$PORTAL_TASK_DIR" "$PORTAL_REQUEST_DIR"/{updates,validations,latency-browser,latency-router,password}
+    local account_auth="auth_basic \"Portal Admin\"; auth_basic_user_file $PORTAL_AUTH_FILE;"
+    local setup_auth=""
+    [[ "$NEEDS_ACCOUNT" == true ]] || setup_auth="$account_auth"
+    mkdir -p "$PORTAL_TASK_DIR" "$PORTAL_REQUEST_DIR"/{updates,validations,uploads,latency-browser,latency-router,password}
     chown -R www-data:www-data "$PORTAL_TASK_DIR" "$PORTAL_REQUEST_DIR"
     if [[ ! -f "$PORTAL_CONF_TEMPLATE" ]]; then
         cp "$PORTAL_CONF" "$PORTAL_CONF_TEMPLATE"
     fi
     cp "$PORTAL_CONF_TEMPLATE" "$PORTAL_CONF"
-    if [[ -n "$PORTAL_ADMIN_KEY" ]]; then
-        sed -i "s|__PORTAL_AUTH__|auth_basic \"Portal Admin\"; auth_basic_user_file $PORTAL_AUTH_FILE;|g" "$PORTAL_CONF"
-    else
-        sed -i "s|__PORTAL_AUTH__||g" "$PORTAL_CONF"
-    fi
+    sed -i -e "s|__PORTAL_AUTH__|if (!-f $PORTAL_READY_FILE) { return 403; } $account_auth|g" \
+        -e "s|__SETUP_AUTH__|$setup_auth|g" "$PORTAL_CONF"
     write_portal_config
-    init_settings
     if [[ -f "$PORTAL_STATUS_FILE" ]]; then
         cp "$PORTAL_STATUS_FILE" "$PORTAL_STATUS_PUBLIC"
         ensure_public_file_readable "$PORTAL_STATUS_PUBLIC"
@@ -1478,7 +1468,7 @@ update_geodata_resources() {
     fi
 
     if [[ "$first_start" -eq 1 && "$prefetch_failed" -eq 1 ]]; then
-        GEODATA_AUTO_UPDATE="false"
+        touch /tmp/portal-geodata-disabled
         log "First startup geodata prefetch failed/timeout. Auto disabling GEODATA_AUTO_UPDATE for this run."
     fi
 
@@ -1490,7 +1480,10 @@ update_geodata_resources() {
 # 参数 $2: DOWNLOAD_SCOPE -> active | all | switch
 update_resources() (
     local mode="${1:-update}" scope="${2:-active}" request_id="${3:-}" expected_subs="${4:-}" expected_settings="${5:-}"
+    local require_download="${6:-false}"
+    local upload_source="${7:-}"
     local lock_fd stage active cache candidate builtin idx header downloaded=false failures=0 subs_signature settings_signature
+    local active_local=false
     local -a targets=()
     exec {lock_fd}>/tmp/clash_update.lock
     flock "$lock_fd"
@@ -1517,9 +1510,16 @@ update_resources() (
     fi
     active="${ACTIVE_SUB_INDEX:-0}"
     cache=$(subscription_cache_file_by_index "$active")
+    [[ "${SUBS_URLS_ARRAY[$active]}" != local:* ]] || active_local=true
     if [[ "$scope" == "all" ]]; then
-        targets=("${!SUBS_URLS_ARRAY[@]}")
-    elif [[ "$scope" != "switch" || ! -s "$cache" ]]; then
+        for idx in "${!SUBS_URLS_ARRAY[@]}"; do
+            [[ "${SUBS_URLS_ARRAY[$idx]}" == local:* ]] || targets+=("$idx")
+        done
+        if [[ "$mode" == update && "${#targets[@]}" -eq 0 ]]; then
+            write_task_status "$request_id" success "本地 YAML 已保存，可重新上传以更新。"
+            return 0
+        fi
+    elif [[ "$active_local" == false ]] && [[ "$scope" != "switch" || ! -s "$cache" ]]; then
         targets=("$active")
     fi
     for idx in "${targets[@]}"; do
@@ -1546,7 +1546,10 @@ update_resources() (
     fi
     # A failed active download is an error, even when the previous cache exists.
     # At startup the previous cache can still start the service while offline.
-    if [[ "$mode" != "initial" && ( "$scope" != "switch" || ! -s "$cache" ) && "$downloaded" != "true" ]]; then
+    if [[ "$require_download" == true && "$downloaded" != true && "$active_local" == false ]]; then
+        return 1
+    fi
+    if [[ "$active_local" == false && "$mode" != "initial" && ( "$scope" != "switch" || ! -s "$cache" ) && "$downloaded" != "true" ]]; then
         local active_error="${SUBS_ERRORS_ARRAY[$active]:-当前订阅更新失败}"
         load_subscriptions "$stage/input-subs.json" || true
         SUBS_ERRORS_ARRAY[$active]="$active_error"
@@ -1556,16 +1559,24 @@ update_resources() (
         return 1
     fi
     candidate="$stage/candidate.yaml"
-    local source="$cache"
+    local source="${upload_source:-$cache}"
     [[ ! -s "$stage/$active.sub" ]] || source="$stage/$active.sub"
     if ! generate_config "$source" "$candidate" "$builtin" || ! validate_generated_config "$candidate"; then
-        restore_applied_selection
+        [[ "$mode" == "initial" ]] || restore_applied_selection
         write_task_status "$request_id" failed "配置校验失败，已恢复原选择和配置"
         return 1
+    fi
+    if [[ "$active_local" == true ]]; then
+        SUBS_UPDATED_ARRAY[$active]="${SUBS_UPDATED_ARRAY[$active]:-$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')}"
+        SUBS_ERRORS_ARRAY[$active]=""
+        cache_subscription_info_unknown_for_index "$active" "本地 YAML 文件不提供流量信息"
     fi
     if [[ "$subs_signature" != "$(sha256sum "$SUBSCRIPTIONS_PUBLIC" | cut -d' ' -f1)" || "$settings_signature" != "$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)" ]]; then
         write_task_status "$request_id" failed "校验期间设置发生变化，请重试"
         return 1
+    fi
+    if [[ -n "$upload_source" ]]; then
+        mv "$upload_source" "$cache" || return 1
     fi
     if [[ -f "$CONFIG_FILE" ]]; then cp "$CONFIG_FILE" "$stage/previous.yaml" || return 1; fi
     cp "$candidate" "$CONFIG_FILE.new" || return 1
@@ -1585,17 +1596,21 @@ update_resources() (
     fi
     for idx in "${targets[@]}"; do
         [[ -s "$stage/$idx.sub" ]] || continue
-        mv "$stage/$idx.sub" "$(subscription_cache_file_by_index "$idx")"
+        mv "$stage/$idx.sub" "$(subscription_cache_file_by_index "$idx")" || return 1
     done
-    cp "$cache" "$DEBUG_RAW_CONFIG"
+    cp "$cache" "$DEBUG_RAW_CONFIG" || return 1
     jq -n --arg url "${SUBS_URLS_ARRAY[$active]}" --argjson builtin "$builtin" --slurpfile settings "$SETTINGS_PUBLIC" \
         '{url:$url,builtinEnabled:$builtin,proxyAuthConfigured:($settings[0] | has("proxyUsername") or has("proxyPassword")),proxyUsername:($settings[0].proxyUsername // ""),
-          proxyPassword:($settings[0].proxyPassword // "")}' > "$APPLIED_STATE_FILE.tmp"
-    chmod 600 "$APPLIED_STATE_FILE.tmp"
-    mv "$APPLIED_STATE_FILE.tmp" "$APPLIED_STATE_FILE"
-    write_subscriptions_state "$SUBSCRIPTIONS_FILE"
+          proxyPassword:($settings[0].proxyPassword // "")}' > "$APPLIED_STATE_FILE.tmp" || return 1
+    chmod 600 "$APPLIED_STATE_FILE.tmp" || return 1
+    mv "$APPLIED_STATE_FILE.tmp" "$APPLIED_STATE_FILE" || return 1
+    write_subscriptions_state "$SUBSCRIPTIONS_FILE" || return 1
     if [[ "$settings_signature" == "$(sha256sum "$SETTINGS_PUBLIC" | cut -d' ' -f1)" ]]; then
-        cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE"
+        cp "$SETTINGS_PUBLIC" "$SETTINGS_FILE" || return 1
+    fi
+    if [[ "$mode" != "initial" ]] && ! portal_config sync >/dev/null; then
+        write_task_status "$request_id" failed "无法持久化配置，请检查数据目录权限"
+        return 1
     fi
     write_subscription_info_from_cache_index "$active" || true
     write_portal_status
@@ -1605,28 +1620,175 @@ update_resources() (
     log "$message"
 )
 
+write_setup_status() {
+    local state="$1" account="$2" subscription="$3" message="${4:-}" builtin
+    builtin=$(jq -r '.builtinEnabled == true' "$SETTINGS_FILE")
+    jq -n --arg state "$state" --argjson account "$account" --argjson subscription "$subscription" \
+        --arg message "$message" --argjson builtin "$builtin" \
+        --argjson timeout "$((10#$SUBSCR_DOWNLOAD_MAX_TIME + 10#$CONFIG_VALIDATE_MAX_TIME * 3 + 180))" \
+        '{state:$state,needsAccount:$account,needsSubscription:$subscription,builtinEnabled:$builtin,message:$message,timeoutSeconds:$timeout}' \
+        > "$PORTAL_SETUP_DIR/status.json.tmp"
+    mv "$PORTAL_SETUP_DIR/status.json.tmp" "$PORTAL_SETUP_DIR/status.json"
+}
+
+write_setup_result() {
+    local id="$1" state="$2" message="$3"
+    local result="$PORTAL_SETUP_DIR/results/$id.json"
+    jq -n --arg state "$state" --arg message "$message" '{state:$state,message:$message}' > "$result.tmp"
+    mv "$result.tmp" "$result"
+}
+
+setup_subscriptions_candidate() {
+    local url="$1" name="$2" initial='{}'
+    if jq -e 'type=="object"' "$SUBSCRIPTIONS_FILE" >/dev/null 2>&1; then
+        initial=$(cat "$SUBSCRIPTIONS_FILE")
+    fi
+    jq --arg url "$url" --arg name "$name" '
+        .urls = (.urls // [(.items // [])[] | .url] |
+                 if index($url) == null then . + [$url] else . end) |
+        .active = (.urls | index($url)) | del(.requestId) |
+        if $name != "" then .items = (((.items // []) | map(select(.url != $url))) + [{url:$url,name:$name}]) else . end
+    ' <<< "$initial" > "$SUBSCRIPTIONS_PUBLIC.tmp" &&
+        mv "$SUBSCRIPTIONS_PUBLIC.tmp" "$SUBSCRIPTIONS_PUBLIC"
+}
+
+apply_setup_request() {
+    local id="$1" workdir="$2" validated url builtin message staged=false name="" upload_source="" parsed
+    if ! validated=$(portal_config validate-setup < "$workdir/request"); then
+        message=$(jq -r '.message // "初始化请求无效。"' <<< "$validated")
+        write_setup_result "$id" failed "$message"
+        return 1
+    fi
+    url=$(jq -r '.url' <<< "$validated")
+    builtin=$(jq -r '.builtin | if type=="boolean" then tostring else empty end' <<< "$validated")
+    if jq -e '.hasUpload' <<< "$validated" >/dev/null; then
+        upload_source="$workdir/source"
+        if ! parsed=$(python3 /opt/scripts/subscription_upload.py "$upload_source" < "$workdir/request"); then
+            write_setup_result "$id" failed "$(jq -r '.message' <<< "$parsed")"
+            return 1
+        fi
+        url=$(jq -r '.url' <<< "$parsed")
+        name=$(jq -r '.name' <<< "$parsed")
+    fi
+    if [[ "$NEEDS_SUBSCRIPTION" == true && -z "$url" ]]; then
+        write_setup_result "$id" failed "请输入订阅链接或上传本地 YAML 文件。"
+        return 1
+    fi
+    write_setup_result "$id" running "正在校验订阅，成功后会启动服务。"
+    if [[ -n "$url" ]]; then
+        if setup_subscriptions_candidate "$url" "$name"; then
+            staged=true
+            if [[ "$builtin" == true || "$builtin" == false ]]; then
+                if ! jq --argjson builtin "$builtin" '.builtinEnabled = $builtin' "$SETTINGS_FILE" > "$SETTINGS_PUBLIC.tmp" ||
+                   ! mv "$SETTINGS_PUBLIC.tmp" "$SETTINGS_PUBLIC"; then
+                    staged=false
+                fi
+            fi
+        fi
+    fi
+    if [[ -z "$url" || "$staged" == true ]] && update_resources initial active "" "" "" "$staged" "$upload_source"; then
+        if portal_config complete < "$workdir/request" >/dev/null; then
+            return 0
+        fi
+        write_setup_result "$id" failed "无法保存初始化配置，请检查数据目录权限后重试。"
+        return 1
+    fi
+    cp "$SUBSCRIPTIONS_FILE" "$SUBSCRIPTIONS_PUBLIC"
+    cp "$SETTINGS_FILE" "$SETTINGS_PUBLIC"
+    ensure_public_file_readable "$SUBSCRIPTIONS_PUBLIC"
+    ensure_public_file_readable "$SETTINGS_PUBLIC"
+    NEEDS_SUBSCRIPTION=true
+    message="订阅下载或配置校验失败。请检查链接和订阅格式后重试。"
+    [[ -z "$upload_source" ]] || message="YAML 配置校验失败。请检查文件内容和规则模板设置后重试。"
+    write_setup_status pending "$NEEDS_ACCOUNT" "$NEEDS_SUBSCRIPTION" "$message"
+    write_setup_result "$id" failed "$message"
+    return 1
+}
+
+wait_for_setup() {
+    local request workdir id
+    log "Waiting for Portal setup."
+    while true; do
+        for request in "$PORTAL_SETUP_DIR/requests/"*; do
+            [[ -f "$request" ]] || continue
+            id=${request##*/}
+            [[ "$id" =~ ^[A-Za-z0-9-]{1,80}$ ]] || continue
+            workdir=$(mktemp -d "$LOCAL_SUBS_DIR/.upload.XXXXXX") || return 1
+            if mv "$request" "$workdir/request" && apply_setup_request "$id" "$workdir"; then
+                rm -rf "$workdir"
+                SETUP_REQUEST_ID="$id"
+                return 0
+            fi
+            rm -rf "$workdir"
+        done
+        sleep 1
+    done
+}
+
+publish_portal_ready() {
+    touch "$PORTAL_READY_FILE"
+    write_setup_status ready false false
+    if [[ -n "$SETUP_REQUEST_ID" ]]; then
+        write_setup_result "$SETUP_REQUEST_ID" success "初始化完成。"
+    fi
+    find "$PORTAL_SETUP_DIR/requests" -maxdepth 1 -type f -delete
+}
+
+run_portal_workers_when_ready() {
+    until curl -fsS --connect-timeout 2 --max-time 3 -H "Authorization: Bearer $CLASH_SECRET" \
+        "http://127.0.0.1:$DASH_PORT/version" >/dev/null 2>&1; do
+        sleep 1
+    done
+    watch_portal_update &
+    echo "$!" > /tmp/portal-worker.pid
+    update_geodata_resources &
+    auto_update_loop
+}
+
 # ========= 主逻辑 =========
-
-# 0. 启动快捷入口页面
 validate_environment
-rm -f /tmp/portal-core-started /tmp/portal-auto-worker.pid
+rm -f "$PORTAL_READY_FILE" /tmp/portal-geodata-disabled /tmp/portal-worker.pid /tmp/portal-auto-worker.pid
+mkdir -p "$PORTAL_SETUP_DIR/requests" "$PORTAL_SETUP_DIR/results"
+chown www-data:www-data "$PORTAL_SETUP_DIR/requests"
+chmod 700 "$PORTAL_SETUP_DIR/requests"
+find "$PORTAL_SETUP_DIR/requests" "$PORTAL_SETUP_DIR/results" -maxdepth 1 -type f -delete
+if ! account_result=$(portal_config initialize); then
+    log "ERROR: Unable to initialize Portal account configuration."
+    exit 1
+fi
+NEEDS_ACCOUNT=$(jq -r '.accountReady | not' <<< "$account_result")
+NEEDS_SUBSCRIPTION=true
+SETUP_REQUEST_ID=""
+ensure_secret
+init_settings
 init_subscriptions
+seed_geodata_from_image
+if load_subscriptions; then
+    NEEDS_SUBSCRIPTION=false
+fi
+if [[ "$NEEDS_ACCOUNT" == false && "$NEEDS_SUBSCRIPTION" == false ]]; then
+    write_setup_status starting false false
+else
+    write_setup_status pending "$NEEDS_ACCOUNT" "$NEEDS_SUBSCRIPTION"
+fi
+echo "$$" > /tmp/portal-worker.pid
 start_portal
-update_geodata_resources
-watch_portal_update &
-echo "$!" > /tmp/portal-worker.pid
 
-# 1. 首次运行：等待订阅，然后执行更新和配置生成
-wait_for_subscriptions
-update_resources "initial" active "$(jq -r '.requestId // empty' "$SUBSCRIPTIONS_PUBLIC")"
+if [[ "$NEEDS_ACCOUNT" == false && "$NEEDS_SUBSCRIPTION" == false ]]; then
+    if ! update_resources initial active; then
+        NEEDS_SUBSCRIPTION=true
+        write_setup_status pending false true "已保存的订阅暂时不可用，请检查订阅链接。"
+        wait_for_setup
+    elif ! printf '{}' | portal_config complete >/dev/null; then
+        log "ERROR: Unable to persist Portal configuration."
+        exit 1
+    fi
+else
+    wait_for_setup
+fi
 
-# 2. 启动后台自动更新循环
-auto_update_loop &
+run_portal_workers_when_ready &
 echo "$!" > /tmp/portal-auto-worker.pid
-
-# 3. 启动 mihomo (前台运行)
-# 使用 exec 替换当前 shell 进程，让 clash 成为 PID 1 (或继承 PID)
 log "Starting clash (mihomo) in foreground..."
 export SAFE_PATHS="/opt/ui"
-touch /tmp/portal-core-started
 exec clash -d "$CONFIG_DIR"

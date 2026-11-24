@@ -11,3 +11,4 @@ core/clash-linux-*
 __pycache__/
 *.pyc
 .env
+docker-compose.dev.yml

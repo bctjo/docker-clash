@@ -21,60 +21,46 @@
 docker compose up -d
 ```
 
-2. 打开 Portal
+2. 打开 `http://localhost:9090`
 
-- `http://localhost:9090`
-- 从 `v1.1.4` 起默认无需登录；未设置认证开关的旧容器更新镜像后也不会自动开启密码。
+3. 在全屏初始化页设置管理用户名和密码，输入 Clash YAML 订阅链接，或上传本地 `.yaml` / `.yml` 文件，然后完成校验。
 
-3. 填写订阅地址并保存
+初始化会校验订阅配置并等待 Mihomo 启动。全部完成后自动进入控制台。失败时可修正配置并重试。
 
-保存时页面会等待后台校验和应用结果，成功后即可在面板中使用。
+进入控制台后，可在“订阅”中上传、切换或替换本地 YAML。文件最大 16 MiB，保存在 `data/local-subscriptions/`。定时更新只下载链接订阅，本地配置可通过重新上传更新。
 
 内置规则模板默认关闭，使用订阅自带的分组和规则。因此默认需要包含 `rules` 的完整 Clash YAML 配置（或 `mode: global` 的配置）。只有节点列表的 YAML 订阅需要在设置中开启内置规则模板；节点 URI 和 Base64 订阅需要先转换为 Clash YAML。
 
 启用内置模板时，“🚀 默认代理”优先选择“⚡ 自动选择”（全部节点自动测速），其次才是香港等地区分组。已有的模板开关和手动选择继续保留。
 
-## 可选：开启管理密码
+旧订阅中的 `global-client-fingerprint` 会在生成配置时迁移为支持该选项的节点的 `client-fingerprint`，保留节点显式设置（包括 `none`）。完整配置和内置模板模式均支持。HTTP / file / inline 类型的 `proxy-providers` 通过条件覆写在加载及更新时补齐缺少的指纹，保留已有覆写表达式的优先级。最终配置移除旧全局字段，原始订阅缓存保持原样。provider 迁移使用 `override-expr`，自定义旧内核需确认支持该功能。项目固定的 Mihomo 版本见 [core/mihomo-version.txt](core/mihomo-version.txt)。
 
-密码认证默认关闭。需要登录保护时，在项目 `.env` 中显式设置：
+## 管理账号与升级
+
+已有自设管理密码会迁移并继续生效，旧版用户名仍为 `admin`。曾经免登录或只使用自动生成密码的实例会先要求设置自己的账号和密码。已有可用订阅会沿用，订阅不可用时初始化页会要求重新导入。旧版的 `PORTAL_AUTH_ENABLED=false` 已失效。
+
+Portal 将管理用户名、加盐后的密码哈希、订阅选择和页面设置保存到 `data/.env`，容器启动时自动读取。文件权限为 `0600`。登录后可在“设置 → 修改管理密码”更换密码，新密码立即生效并在重启后保留。
+
+也可以用项目根目录的 `.env` 预设管理账号和订阅。
 
 ```dotenv
-PORTAL_AUTH_ENABLED=true
+PORTAL_ADMIN_USERNAME=admin
 PORTAL_ADMIN_KEY=你的密码
+SUBSCR_URLS=https://example.com/subscription.yaml
 ```
 
-用户名固定为 `admin`。认证开启后，如果没有设置密码且没有保存过密码，首次启动会自动生成密码并持久化；可以通过以下命令读取：
+未指定用户名时使用 `admin`。已保存的订阅优先于 `SUBSCR_URLS`，容器会验证订阅并在服务启动后开放控制台。需要通过环境变量重置管理密码时，使用新的 `PORTAL_ADMIN_KEY` 值并执行 `docker compose up -d`。
 
-```bash
-docker compose exec -T clash cat /root/.config/clash/portal-admin.key
-```
+## API 密钥
 
-从 `v1.1.3` 起，自动生成的密码也会在每次容器启动时显示，日志中搜索“自动生成密码”即可：
+API 密钥与管理密码独立，默认自动生成并保存到 `data/portal.json`。从旧版免登录模式升级时，自动管理的密钥会更新一次；后续重启保持不变。面板从 Portal 重新打开即可使用当前密钥。
 
-```bash
-docker compose logs clash
-```
-
-登录后打开“设置 → 修改管理密码”，输入当前密码、新密码及确认密码即可。修改立即生效，旧密码失效，新密码会保存到 `data/portal-admin.key`，重启后继续使用。手动设置或在页面修改的密码不会打印到日志。
-
-页面修改的密码会优先于原来的 `PORTAL_ADMIN_KEY` 环境变量；如果需要通过环境变量重置密码，把 `PORTAL_ADMIN_KEY` 改成一个新的非空值，再运行 `docker compose up -d`。
-
-密码没有复杂度要求，可以直接设置成自己方便记忆的密码。修改 `.env` 后运行 `docker compose up -d`，容器会使用新设置。
-
-如果想关闭 Portal 密码，在 `.env` 中加入：
-
-```dotenv
-PORTAL_AUTH_ENABLED=false
-```
-
-然后执行 `docker compose pull` 和 `docker compose up -d`。关闭后无需登录即可访问管理功能、订阅地址和 API 密钥；已有密码文件会保留，重新设为 `true` 后继续使用。
-
-如果旧版 `docker-compose.yml` 的 `environment` 已写入 `PORTAL_AUTH_ENABLED: "true"` 或 `${PORTAL_AUTH_ENABLED:-true}`，仅更新镜像会继续沿用这个值。请把该项改为 `"false"`，再运行 `docker compose up -d` 重建容器。已有密码文件会保留，但不会自行重新开启认证。
+需要手动轮换时，在 `.env` 中将 `CLASH_SECRET` 设置为新值（可用 `openssl rand -hex 24` 生成），然后运行 `docker compose up -d --force-recreate`。显式设置的 `CLASH_SECRET` 优先于自动管理的密钥，升级时也会保留。修改管理密码不会更改 API 密钥，二者需要分别管理。
 
 ## 默认端口
 
 - `9090`: Portal、全部 Dashboard 和 Clash API 的统一入口
-- `9097`: 容器内 Clash API 端口（可选直连，默认不映射）
+- `9097`: 容器内 Clash API 端口（默认仅监听回环地址，不映射）
 - `7890`: HTTP 代理
 - `7891`: SOCKS5 代理
 - `7892`: TPROXY
@@ -84,13 +70,13 @@ PORTAL_AUTH_ENABLED=false
 
 外网只需穿透 Web 端口 `9090`。从 Portal 点击 Metacubexd、Zashboard 或 Yacd，面板页面、API、连接和日志的 WebSocket 都使用当前访问的域名、协议和端口；支持穿透服务将外部 HTTPS 域名或其他端口映射到容器的 `9090`。无需额外穿透 `9097`，也无需手动填写控制地址或 API 密钥。穿透服务需支持 WebSocket。
 
-内部 `DASH_PORT` 与 `PORTAL_PORT` 仍应使用不同端口。需要直接连接内核 API 时，可取消 Compose 中 `9097:9097` 的注释。外网管理可通过前面的“开启管理密码”设置保护。
+内部 `DASH_PORT` 与 `PORTAL_PORT` 仍应使用不同端口。需要直接连接内核 API 时，在 `.env` 中设置 `DASH_BIND_ADDRESS=0.0.0.0`，并取消 Compose 中 `127.0.0.1:9097:9097` 的注释；直连仍使用 API 密钥。通过 Portal 访问面板和 API 无需更改这些设置。公网管理入口使用 HTTPS。
 
 ## 可选：代理用户名和密码
 
 打开 Portal 的“设置 → 代理认证”，填写代理用户名和密码并保存，即可为 HTTP、SOCKS 和 Mixed 代理开启认证。两项都留空并保存，则无需认证；只填写其中一项会提示补全。
 
-代理认证与 Portal 管理密码、Clash API 密钥相互独立，不适用于 TPROXY 透明代理。设置保存到 `data/settings.json`，应用失败会恢复原认证设置，重启、切换订阅和更新订阅后继续生效。开启代理认证后，内置代理规则延迟检测也会携带认证信息。
+代理认证与 Portal 管理密码、Clash API 密钥相互独立，不适用于 TPROXY 透明代理。设置随 Portal 配置保存到 `data/.env`，应用失败会恢复原认证设置，重启、切换订阅和更新订阅后继续生效。开启代理认证后，内置代理规则延迟检测也会携带认证信息。
 
 Portal 保存的代理认证设置优先于订阅中的 `authentication` 和 `skip-auth-prefixes`。升级前已在订阅中设置认证、且尚未通过 Portal 保存代理认证字段时，会保留订阅的原设置。
 
@@ -104,7 +90,7 @@ Portal 保存的代理认证设置优先于订阅中的 `authentication` 和 `sk
 
 容器启动与更新流程包含以下保护机制：
 
-- geodata 预下载（`Country.mmdb` / `GeoSite.dat` / `GeoIP.dat`）
+- 内置 geodata 初始化后可在后台更新（`Country.mmdb` / `GeoSite.dat` / `GeoIP.dat`）
 - 构建阶段内置 geodata，弱网首启可直接使用镜像内文件
 - 首次启动 geodata 下载失败/超时会自动熔断本次自动更新，避免反复重试阻塞
 - 配置应用前执行 `clash -t` 校验
@@ -122,20 +108,21 @@ Portal 保存的代理认证设置优先于订阅中的 `authentication` 和 `sk
 
 你通常只需要关心这几个：
 
-- `SUBSCR_URLS`: 订阅地址（逗号分隔）
+- `SUBSCR_URLS`: 首次初始化的订阅地址（逗号分隔）
 - `SUBSCR_VALIDATE_MAX_TIME`: 导入订阅时单次校验下载超时（秒，默认 120）
 - `SUBSCR_DOWNLOAD_MAX_TIME`: 更新订阅时单次下载超时（秒，默认 120）
 - `SUBSCR_CONNECT_TIMEOUT`: 订阅下载连接超时（秒，默认 15）
-- `PORTAL_ADMIN_KEY`: Portal 管理密码（仅在显式开启认证后使用；未指定且无已保存密码时自动生成）
-- `PORTAL_AUTH_ENABLED`: 是否启用 Portal 密码（默认 `false`，显式设置 `true` 才开启；优先于密码设置）
+- `PORTAL_ADMIN_USERNAME`: 可选的管理用户名，与预设密码一起使用
+- `PORTAL_ADMIN_KEY`: 可选的预设管理密码；留空时可在初始化页设置
 - `CONFIG_VALIDATE_MAX_TIME`: 配置校验超时（秒，默认 90）
 - `SUBSCR_MAX_BYTES`: 订阅最大下载大小（字节，默认 16 MiB）
 - `UPDATE_INTERVAL`: 自动更新间隔（秒，默认 43200）
-- `CLASH_SECRET`: API 密钥（为空会生成并持久化；访问权限遵循 Portal 认证设置）
+- `CLASH_SECRET`: API 密钥（留空自动管理；设置新值并重建容器可轮换）
+- `DASH_BIND_ADDRESS`: 核心 API 监听地址（默认 `127.0.0.1`；显式直连时可设为 `0.0.0.0`）
 
 更多配置可查看 `docker-compose.yml`。
 
-开启 Portal 认证后，密码会保护管理操作、连接密钥、代理认证设置及订阅信息。面板 API 继续由 Clash API 密钥认证，首页自动连接但不展示该密钥。HTTP / SOCKS / Mixed 代理自身的账号密码在“设置 → 代理认证”中配置。
+管理密码保护管理操作、连接密钥、代理认证设置及订阅信息。面板 API 继续由 Clash API 密钥认证，首页自动连接但不展示该密钥。HTTP / SOCKS / Mixed 代理自身的账号密码在“设置 → 代理认证”中配置。
 
 延迟检测有两种模式：“容器直连检测”从容器发起连接，“代理规则检测”通过 Mixed 端口按当前规则访问各个目标；这两种检测都不代表浏览器所在设备的网络。
 
@@ -145,7 +132,7 @@ Portal 保存的代理认证设置优先于订阅中的 `authentication` 和 `sk
 
 - 运行配置与原始订阅配置
 - geodata 文件
-- Portal 设置、订阅和状态
+- Portal 配置文件 `data/.env`、订阅缓存和运行状态
 
 迁移或备份时保留该目录即可。
 
@@ -165,21 +152,13 @@ Portal 保存的代理认证设置优先于订阅中的 `authentication` 和 `sk
 
 ## 本地构建（可选）
 
-如果你想自己构建镜像：
-
-默认会在构建时自动下载 mihomo 内核，版本来自 `core/mihomo-version.txt`。
-
-你也可以通过构建参数临时覆盖版本：
+从源码构建镜像，构建时会自动下载 `core/mihomo-version.txt` 指定的 mihomo 内核。
 
 ```bash
-docker build --build-arg MIHOMO_VERSION=v1.19.20 -t clash-meta-dev:local .
+docker build -t clash-meta:local .
 ```
 
-```bash
-docker compose -f docker-compose.dev.yml up --build
-```
-
-这个文件使用 bridge + 显式端口映射，适合本地开发测试。
+如需临时使用其他内核版本，可传入 `--build-arg MIHOMO_VERSION=v1.19.20`。部署自建镜像时，将 Compose 中的 `image` 改为所构建的镜像标签。
 
 ## 本地验证
 
@@ -191,6 +170,15 @@ docker run --rm --entrypoint python3 -v "$PWD:/src:ro" -w /src clash-meta-review
 python3 tests/integration.py
 node tests/check_frontend.cjs
 ```
+
+只验证配置和指纹兼容性时，本机安装 PyYAML 后可运行：
+
+```bash
+python3 -m unittest discover -s tests -p 'test_config_tool.py' -v
+MIHOMO_BIN=/path/to/mihomo python3 -m unittest discover -s tests -p 'test_fingerprint_runtime.py' -v
+```
+
+指纹运行测试使用本地模拟端点捕获 VLESS + REALITY 的 TLS ClientHello，对比继承值、节点显式值及 provider 覆写和更新后的实际指纹；不使用真实订阅，也不代表真实节点的端到端连通性。容器中的配置测试会自动使用 `/usr/bin/clash` 运行此测试；本机未提供内核时跳过。
 
 可选浏览器测试需要 Playwright 及 Chromium：`RUN_BROWSER_TESTS=1 python3 tests/integration.py`。
 

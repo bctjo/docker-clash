@@ -19,8 +19,7 @@ jobs:
         run: |
           for script in entrypoint.sh scripts/*.sh; do bash -n "$script"; done
           node tests/check_frontend.cjs
-          docker compose -f docker-compose.yml config -q
-          docker compose -f docker-compose.dev.yml config -q
+          docker compose config -q
           docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:latest
       - name: Build runtime image
         run: docker build -t clash-meta-review:local .

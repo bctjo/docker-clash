@@ -109,6 +109,7 @@ RUN set -eux; \
 
 # 快捷入口页面
 COPY portal/index.html /opt/portal/index.html
+COPY portal/setup.css portal/setup.js /opt/portal/
 COPY portal/vendor /opt/portal/vendor
 COPY nginx/portal.conf /etc/nginx/conf.d/portal.conf
 
@@ -119,6 +120,7 @@ COPY entrypoint.sh /entrypoint.sh
 COPY config.yaml.template /opt/builtin-rules.yaml
 COPY scripts/config_tool.py /opt/scripts/config_tool.py
 COPY scripts/password_tool.py /opt/scripts/password_tool.py
+COPY scripts/subscription_upload.py /opt/scripts/subscription_upload.py
 COPY scripts/healthcheck.sh /opt/scripts/healthcheck.sh
 COPY scripts/connectivity_probe.sh /opt/scripts/connectivity_probe.sh
 COPY scripts/proxy_connectivity_probe.sh /opt/scripts/proxy_connectivity_probe.sh

@@ -4,721 +4,356 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Clash Portal</title>
-    <script src="./config.js"></script>
-    <script src="./vendor/tailwindcss-cdn.js"></script>
     <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['"IBM Plex Sans"', '"Noto Sans"', '"Segoe UI"', 'sans-serif'],
-              mono: ['"JetBrains Mono"', '"SFMono-Regular"', 'Menlo', 'monospace']
-            }
-          }
-        }
-      };
+      document.documentElement.dataset.theme = localStorage.getItem('portalTheme') ||
+        (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     </script>
-    <style>
-      :root {
-        color-scheme: light dark;
-        --bg: #f8fafc;
-        --bg-soft: #f1f5f9;
-        --panel: #ffffff;
-        --panel-soft: #f8fafc;
-        --text: #0f172a;
-        --muted: #64748b;
-        --accent: #2563eb;
-        --accent-strong: #1d4ed8;
-        --border: #e2e8f0;
-        --ring: rgba(37, 99, 235, 0.28);
-        --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.04);
-        --shadow-lg: 0 20px 50px rgba(15, 23, 42, 0.12);
-      }
-      [data-theme="dark"] {
-        --bg: #020617;
-        --bg-soft: #0b1120;
-        --panel: #0f172a;
-        --panel-soft: #111827;
-        --text: #e2e8f0;
-        --muted: #94a3b8;
-        --accent: #60a5fa;
-        --accent-strong: #3b82f6;
-        --border: rgba(255, 255, 255, 0.1);
-        --ring: rgba(96, 165, 250, 0.35);
-        --shadow-sm: 0 1px 2px rgba(2, 6, 23, 0.45), 0 14px 36px rgba(2, 6, 23, 0.35);
-        --shadow-lg: 0 28px 80px rgba(2, 6, 23, 0.65);
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        color: var(--text);
-        font-family: "IBM Plex Sans", "Noto Sans", "Segoe UI", sans-serif;
-        background:
-          radial-gradient(900px 540px at 85% -15%, rgba(59, 130, 246, 0.12), transparent 60%),
-          radial-gradient(700px 380px at -5% 10%, rgba(14, 165, 233, 0.1), transparent 60%),
-          var(--bg);
-      }
-      [data-theme="dark"] body {
-        background:
-          radial-gradient(1000px 560px at 85% -15%, rgba(56, 189, 248, 0.1), transparent 62%),
-          radial-gradient(760px 420px at -5% 10%, rgba(59, 130, 246, 0.08), transparent 62%),
-          var(--bg);
-      }
-      .glass-header {
-        backdrop-filter: blur(12px);
-        background: color-mix(in oklab, var(--panel) 84%, transparent);
-      }
-      .panel {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        box-shadow: var(--shadow-sm);
-      }
-      .action-item {
-        transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
-      }
-      .action-item:hover {
-        transform: translateX(4px);
-        background: color-mix(in oklab, var(--accent) 12%, var(--panel-soft));
-        border-color: color-mix(in oklab, var(--accent) 44%, var(--border));
-      }
-      .kv {
-        background: var(--panel-soft);
-        border: 1px solid var(--border);
-        border-radius: 0.875rem;
-        padding: 0.85rem 0.95rem;
-        min-height: 4.6rem;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-      }
-      .kv span {
-        display: block;
-        margin-bottom: 0.35rem;
-        font-size: 0.7rem;
-        letter-spacing: 0.04em;
-        color: var(--muted);
-      }
-      .kv strong {
-        display: block;
-        font-family: "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
-        font-size: 0.84rem;
-        line-height: 1.3;
-        color: var(--text);
-        font-weight: 650;
-        word-break: break-all;
-      }
-      .kv {
-        height: 100%;
-      }
-      .mixed-proxy-block {
-        min-height: 5.6rem;
-        display: flex;
-        align-items: center;
-      }
-      .mixed-proxy-block > div {
-        width: 100%;
-      }
-      .modal {
-        position: fixed;
-        inset: 0;
-        display: none;
-        align-items: center;
-        justify-content: center;
-        z-index: 50;
-      }
-      .modal.open {
-        display: flex;
-      }
-      .modal-backdrop {
-        position: absolute;
-        inset: 0;
-        background: rgba(2, 6, 23, 0.58);
-        backdrop-filter: blur(6px);
-      }
-      .modal-card {
-        max-height: calc(100dvh - 32px);
-        overflow-y: auto;
-        position: relative;
-        z-index: 1;
-        width: min(460px, 92vw);
-        background: color-mix(in oklab, var(--panel) 96%, transparent);
-        border: 1px solid var(--border);
-        border-radius: 1rem;
-        box-shadow: var(--shadow-lg);
-        padding: 1.1rem 1.1rem 1rem;
-        backdrop-filter: blur(14px);
-      }
-      .modal-card.compact {
-        width: min(390px, 92vw);
-      }
-      .field,
-      .auto-field,
-      .toggle {
-        color: var(--muted);
-        font-size: 0.78rem;
-      }
-      .field {
-        display: grid;
-        gap: 0.45rem;
-      }
-      .field textarea,
-      .field select,
-      .field input[type="text"],
-      .field input[type="password"],
-      .auto-field input {
-        width: 100%;
-        color: var(--text);
-        border: 1px solid var(--border);
-        background: var(--panel-soft);
-        border-radius: 0.72rem;
-        padding: 0.62rem 0.72rem;
-        line-height: 1.55;
-        outline: none;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
-      }
-      .field textarea:focus,
-      .field select:focus,
-      .field input[type="text"]:focus,
-      .field input[type="password"]:focus,
-      .auto-field input:focus {
-        border-color: var(--accent);
-        box-shadow: 0 0 0 3px var(--ring);
-      }
-      .auto-field { white-space: nowrap; }
-      .auto-field input { width: 6rem; flex: 0 0 auto; }
-      .field textarea {
-        min-height: 136px;
-        resize: vertical;
-      }
-      .toggle {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.55rem;
-      }
-      .toggle input {
-        display: none;
-      }
-      .toggle .slider {
-        width: 2.25rem;
-        height: 1.25rem;
-        border-radius: 999px;
-        background: var(--panel-soft);
-        border: 1px solid var(--border);
-        position: relative;
-        transition: all 0.2s ease;
-      }
-      .toggle .slider::after {
-        content: "";
-        position: absolute;
-        top: 2px;
-        left: 2px;
-        width: 0.8rem;
-        height: 0.8rem;
-        border-radius: 50%;
-        background: var(--muted);
-        transition: all 0.2s ease;
-      }
-      .toggle input:checked + .slider {
-        border-color: color-mix(in oklab, var(--accent) 65%, var(--border));
-        background: color-mix(in oklab, var(--accent) 18%, var(--panel-soft));
-      }
-      .toggle input:checked + .slider::after {
-        transform: translateX(0.95rem);
-        background: var(--accent);
-      }
-      .help {
-        color: var(--muted);
-        font-size: 0.74rem;
-      }
-      .error {
-        color: #ef4444;
-        font-size: 0.78rem;
-      }
-      .modal-actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 0.6rem;
-        margin-top: 0.95rem;
-      }
-      .latency-card {
-        border: 1px solid var(--border);
-        background: var(--panel-soft);
-        border-radius: 0.9rem;
-        padding: 0.85rem 0.9rem;
-      }
-      .latency-badge {
-        width: 1.5rem;
-        height: 1.5rem;
-        border-radius: 0.45rem;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 0.72rem;
-        font-weight: 700;
-        color: #fff;
-      }
-      .latency-logo {
-        width: 1.5rem;
-        height: 1.5rem;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-      }
-      .latency-logo svg {
-        width: 1.35rem;
-        height: 1.35rem;
-        display: block;
-      }
-      .latency-refresh {
-        border: 1px solid var(--border);
-        background: var(--panel);
-        color: var(--text);
-        width: 2rem;
-        height: 2rem;
-        border-radius: 0.65rem;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-      }
-      .latency-refresh:disabled {
-        opacity: 0.65;
-        cursor: not-allowed;
-      }
-      .usage-track {
-        width: 100%;
-        height: 0.6rem;
-        border-radius: 999px;
-        background: color-mix(in oklab, var(--panel-soft) 85%, var(--border));
-        overflow: hidden;
-        border: 1px solid var(--border);
-      }
-      .usage-fill {
-        height: 100%;
-        width: 0%;
-        background: linear-gradient(90deg, #22c55e 0%, #16a34a 100%);
-        transition: width 0.35s ease;
-      }
-    </style>
+    <link rel="stylesheet" href="./setup.css" />
+    <script src="./config.js"></script>
   </head>
   <body>
-    <div id="app"></div>
-
-    <script src="./vendor/react.production.min.js"></script>
-    <script src="./vendor/react-dom.production.min.js"></script>
-    <script src="./vendor/htm.umd.js"></script>
-    <script>
-
-      const html = htm.bind(React.createElement);
-      const IconBase = ({ className = 'h-4 w-4', children }) => html`
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className=${className}
-          aria-hidden="true"
-        >
-          ${children}
-        </svg>
-      `;
-      const LayoutDashboard = ({ className }) => html`
-        <${IconBase} className=${className}>
-          <rect x="3" y="3" width="7" height="7" />
-          <rect x="14" y="3" width="7" height="7" />
-          <rect x="14" y="14" width="7" height="7" />
-          <rect x="3" y="14" width="7" height="7" />
-        </${IconBase}>
-      `;
-      const Activity = ({ className }) => html`
-        <${IconBase} className=${className}>
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-        </${IconBase}>
-      `;
-      const Globe = ({ className }) => html`
-        <${IconBase} className=${className}>
-          <circle cx="12" cy="12" r="10" />
-          <path d="M2 12h20" />
-          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-        </${IconBase}>
-      `;
-      const ChevronRight = ({ className }) => html`
-        <${IconBase} className=${className}>
-          <polyline points="9 18 15 12 9 6" />
-        </${IconBase}>
-      `;
-      const MoonStar = ({ className }) => html`
-        <${IconBase} className=${className}>
-          <path d="M12 3a6 6 0 1 0 9 9 8 8 0 1 1-9-9z" />
-          <path d="M19 3v4" />
-          <path d="M17 5h4" />
-        </${IconBase}>
-      `;
-      const Settings2 = ({ className }) => html`
-        <${IconBase} className=${className}>
-          <path d="M20 7h-9" />
-          <path d="M14 17H5" />
-          <circle cx="17" cy="7" r="3" />
-          <circle cx="8" cy="17" r="3" />
-        </${IconBase}>
-      `;
-      const InfoCircle = ({ className }) => html`
-        <${IconBase} className=${className}>
-          <circle cx="12" cy="12" r="9" />
-          <line x1="12" y1="10.5" x2="12" y2="16" />
-          <line x1="12" y1="7.5" x2="12.01" y2="7.5" />
-        </${IconBase}>
-      `;
-      const GithubMark = ({ className = 'h-3.5 w-3.5' }) => html`
-        <svg viewBox="0 0 24 24" className=${className} aria-hidden="true">
-          <circle cx="12" cy="12" r="10" fill="currentColor"></circle>
-          <path fill="#fff" d="M12 6.7c-3 0-5.5 2.4-5.5 5.5 0 2.4 1.5 4.4 3.6 5.1.3.1.4-.1.4-.3v-1.2c-1.5.3-1.8-.6-1.8-.6-.2-.6-.6-.8-.6-.8-.5-.3 0-.3 0-.3.6 0 .9.6.9.6.5.9 1.3.7 1.6.5.1-.4.2-.7.4-.9-1.2-.1-2.5-.6-2.5-2.9 0-.6.2-1.1.6-1.5-.1-.2-.3-.7.1-1.5 0 0 .5-.2 1.6.6.5-.1 1-.2 1.5-.2s1 .1 1.5.2c1.1-.8 1.6-.6 1.6-.6.3.8.1 1.3.1 1.5.4.4.6.9.6 1.5 0 2.2-1.3 2.7-2.5 2.9.2.2.4.6.4 1.1V17c0 .2.1.4.4.3 2.1-.7 3.6-2.7 3.6-5.1 0-3-2.4-5.5-5.5-5.5z"></path>
-        </svg>
-      `;
-      const Server = ({ className }) => html`
-        <${IconBase} className=${className}>
-          <rect x="2.5" y="3.5" width="19" height="7" rx="2" />
-          <rect x="2.5" y="13.5" width="19" height="7" rx="2" />
-          <line x1="7" y1="7" x2="7.01" y2="7" />
-          <line x1="7" y1="17" x2="7.01" y2="17" />
-          <line x1="11" y1="7" x2="17.5" y2="7" />
-          <line x1="11" y1="17" x2="17.5" y2="17" />
-        </${IconBase}>
-      `;
-      const RefreshCw = ({ className }) => html`
-        <${IconBase} className=${className}>
-          <path d="M21 2v6h-6" />
-          <path d="M3 12a9 9 0 0 1 15-6l3 2" />
-          <path d="M3 22v-6h6" />
-          <path d="M21 12a9 9 0 0 1-15 6l-3-2" />
-        </${IconBase}>
-      `;
-
-      function App() {
-        const actionLinks = [
-          {
-            id: 'link-metacubexd',
-            title: 'Metacubexd',
-            tag: '/ui/metacubexd',
-            Icon: LayoutDashboard
-          },
-          {
-            id: 'link-yacd',
-            title: 'Yacd',
-            tag: '/ui/yacd',
-            Icon: Activity
-          },
-          {
-            id: 'link-zashboard',
-            title: 'Zashboard',
-            tag: '/ui/zashboard',
-            Icon: Globe
-          }
-        ];
-
-        return html`
-          <main className="mx-auto max-w-7xl px-5 pb-14 pt-8 sm:px-8 sm:pt-10 lg:px-12">
-            <header className="glass-header sticky top-4 z-20 rounded-2xl border px-4 py-4 shadow-sm sm:px-6"
-              style=${{ borderColor: 'var(--border)' }}>
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h1 className="text-[1.45rem] font-semibold tracking-tight sm:text-[1.65rem]">Clash Portal</h1>
-                  <p className="mt-1 text-sm" style=${{ color: 'var(--muted)' }}>订阅管理与面板入口</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <div className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs"
-                    style=${{ borderColor: 'var(--border)', background: 'var(--panel-soft)', color: 'var(--muted)' }}>
-                    <${LayoutDashboard} className="h-3.5 w-3.5" />
-                    <span>Web 端口</span>
-                    <span id="portal-port" className="font-mono font-semibold" style=${{ color: 'var(--text)' }}>9090</span>
-                  </div>
-                  <button id="theme-toggle" type="button"
-                    className="inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition hover:-translate-y-0.5"
-                    style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}>
-                    <${MoonStar} className="h-4 w-4" />
-                    <span id="theme-label">浅色</span>
-                  </button>
-                  <button id="open-subs" type="button"
-                    className="inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition hover:-translate-y-0.5"
-                    style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}>
-                    <${Server} className="h-4 w-4" />
-                    订阅
-                  </button>
-                  <button id="open-settings" type="button"
-                    className="inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition hover:-translate-y-0.5"
-                    style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}>
-                    <${Settings2} className="h-4 w-4" />
-                    设置
-                  </button>
-                  <button id="open-about" type="button"
-                    className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-xl border transition hover:-translate-y-0.5"
-                    style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}
-                    title="关于"
-                    aria-label="关于">
-                    <${InfoCircle} className="h-4 w-4" />
-                  </button>
-                </div>
+    <div id="access-screen" class="access-screen">
+      <aside class="access-rail">
+        <div class="access-rail-header">
+          <div class="access-brand">
+            <span class="access-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>Clash Portal</span>
+          </div>
+          <button id="access-theme-toggle" class="access-theme-toggle" type="button">深色模式</button>
+        </div>
+        <ul id="access-steps" class="access-steps" aria-label="配置进度">
+          <li id="setup-step-account"><span>管理账号</span><small id="setup-step-account-state">正在检查</small></li>
+          <li id="setup-step-subscription"><span>订阅配置</span><small id="setup-step-subscription-state">正在检查</small></li>
+        </ul>
+      </aside>
+      <main class="access-content">
+        <section class="access-card" aria-labelledby="access-title">
+          <h1 id="access-title" class="access-title">正在连接 Clash Portal</h1>
+          <p id="access-description" class="access-description" aria-live="polite">正在检查配置状态。</p>
+          <form id="setup-form" class="access-form" hidden>
+            <fieldset id="setup-account" class="access-fieldset" hidden disabled aria-label="设置管理账号">
+              <label class="access-field">用户名
+                <input id="setup-username" type="text" value="admin" required maxlength="32" pattern="[A-Za-z0-9_.\-]{1,32}" autocomplete="username" autocapitalize="none" spellcheck="false" />
+              </label>
+              <div class="access-passwords">
+                <label class="access-field">密码
+                  <input id="setup-password" type="password" required maxlength="128" autocomplete="new-password" />
+                </label>
+                <label class="access-field">确认密码
+                  <input id="setup-confirmation" type="password" required maxlength="128" autocomplete="new-password" />
+                </label>
               </div>
-            </header>
+            </fieldset>
+            <fieldset id="setup-existing" class="access-fieldset" hidden disabled aria-label="登录管理账号">
+              <label class="access-field">用户名
+                <input id="setup-existing-username" type="text" value="admin" required maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" />
+              </label>
+              <label class="access-field">密码
+                <input id="setup-existing-password" type="password" required maxlength="128" autocomplete="current-password" />
+              </label>
+            </fieldset>
+            <fieldset id="setup-subscription" class="access-fieldset" hidden disabled aria-label="导入订阅">
+              <div class="access-source-picker" role="group" aria-label="订阅来源">
+                <label><input name="setup-source" type="radio" checked />订阅链接</label>
+                <label><input id="setup-source-file" name="setup-source" type="radio" />本地 YAML</label>
+              </div>
+              <label class="access-field">订阅链接
+                <input id="setup-url" type="url" placeholder="https://…" required maxlength="4096" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="access-field" hidden>本地 YAML 文件
+                <input id="setup-file" type="file" accept=".yaml,.yml" disabled />
+                <span class="access-file-help">支持 .yaml 和 .yml，最大 16 MiB。</span>
+              </label>
+              <label class="access-option">
+                <input id="setup-builtin" type="checkbox" />
+                <span>使用内置规则模板（适合只包含节点的订阅）</span>
+              </label>
+            </fieldset>
+            <p id="setup-feedback" class="access-feedback" role="status" hidden></p>
+            <button id="setup-submit" class="access-button" type="submit"><span>校验并启用</span><span aria-hidden="true">→</span></button>
+          </form>
+          <form id="login-form" class="access-form" hidden>
+            <label class="access-field">用户名
+              <input id="admin-username" type="text" required maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" />
+            </label>
+            <label class="access-field">密码
+              <input id="admin-key" type="password" required maxlength="128" autocomplete="current-password" />
+            </label>
+            <p id="admin-error" class="access-feedback" role="alert" hidden></p>
+            <button id="admin-confirm" class="access-button" type="submit"><span>登录</span><span aria-hidden="true">→</span></button>
+          </form>
+        </section>
+      </main>
+    </div>
+    <div id="app" hidden>
+      <div id="portal-shell" class="portal-shell">
+        <aside class="access-rail portal-rail">
+          <div class="access-brand">
+            <span class="access-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>Clash Portal</span>
+          </div>
+          <nav class="portal-nav" aria-label="管理工具">
+            <button id="open-subs" type="button" aria-haspopup="dialog" aria-controls="subs-modal">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6m-6 10h6"/></svg>
+              订阅
+            </button>
+            <button id="open-settings" type="button" aria-haspopup="dialog" aria-controls="settings-modal">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h5m4 0h9M3 12h10m4 0h4M3 18h3m4 0h11M8 4v4m9 2v4m-7 2v4"/></svg>
+              设置
+            </button>
+            <button id="open-about" type="button" aria-haspopup="dialog" aria-controls="about-modal">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></svg>
+              关于
+            </button>
+            <button id="logout" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h5m3-8h8m-4-4 4 4-4 4"/></svg>
+              退出登录
+            </button>
+          </nav>
+          <button id="theme-toggle" class="access-theme-toggle portal-theme" type="button">
+            <svg class="portal-theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.9 13.4A9 9 0 0 1 10.6 3.1 9 9 0 1 0 20.9 13.4Z"/></svg>
+            <svg class="portal-theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg>
+            <span id="theme-label">深色模式</span>
+          </button>
+        </aside>
 
-            <section className="mt-7 grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)]">
-              <article className="panel rounded-2xl p-6 sm:p-7">
-                <div className="space-y-4">
-                  <p className="text-[11px] uppercase tracking-[0.16em]" style=${{ color: 'var(--muted)' }}>代理端口</p>
-                  <div id="info" className="grid auto-rows-fr gap-3 sm:grid-cols-2"></div>
+        <main class="portal-workspace">
+          <header class="portal-heading">
+            <h1 class="access-title">控制台</h1>
+            <div class="portal-endpoint">Web 端口 <strong id="portal-port">9090</strong></div>
+          </header>
 
-                  <div className="mixed-proxy-block rounded-2xl border-l-4 p-4"
-                    style=${{ borderColor: 'var(--accent)', background: 'color-mix(in oklab, var(--accent) 10%, var(--panel))' }}>
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <p className="text-[11px] uppercase tracking-[0.12em]" style=${{ color: 'var(--muted)' }}>混合代理地址 (HTTP)</p>
-                        <p id="mixed-proxy" className="mt-1 font-mono text-sm font-semibold" style=${{ color: 'var(--accent-strong)' }}>
-                          http://127.0.0.1:7893
-                        </p>
-                      </div>
-                      <button id="copy-mixed" type="button"
-                        className="rounded-lg border px-3 py-1.5 text-xs font-medium transition hover:-translate-y-0.5"
-                        style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}>
-                        复制
-                      </button>
-                    </div>
-                  </div>
-                </div>
+          <section class="portal-section" aria-labelledby="panels-title">
+            <h2 id="panels-title">面板入口</h2>
+            <div class="portal-panels">
+              <a id="link-metacubexd" target="_blank" rel="noreferrer" class="portal-panel">
+                <span class="portal-panel-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                </span>
+                <span class="portal-panel-name"><strong>Metacubexd</strong><small>/ui/metacubexd</small></span>
+                <span class="portal-panel-arrow" aria-hidden="true">↗</span>
+              </a>
+              <a id="link-yacd" target="_blank" rel="noreferrer" class="portal-panel">
+                <span class="portal-panel-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h4l3-8 6 16 3-8h4"/></svg>
+                </span>
+                <span class="portal-panel-name"><strong>Yacd</strong><small>/ui/yacd</small></span>
+                <span class="portal-panel-arrow" aria-hidden="true">↗</span>
+              </a>
+              <a id="link-zashboard" target="_blank" rel="noreferrer" class="portal-panel">
+                <span class="portal-panel-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z"/></svg>
+                </span>
+                <span class="portal-panel-name"><strong>Zashboard</strong><small>/ui/zashboard</small></span>
+                <span class="portal-panel-arrow" aria-hidden="true">↗</span>
+              </a>
+            </div>
+          </section>
 
-              </article>
-
-              <article className="panel rounded-2xl p-6 sm:p-7">
+          <div class="portal-runtime">
+            <section class="portal-section" aria-labelledby="proxy-title">
+              <div class="portal-section-heading"><h2 id="proxy-title">代理连接</h2></div>
+              <dl id="info" class="portal-ports" aria-label="代理端口"></dl>
+              <div class="portal-address">
                 <div>
-                  <p className="mb-3 text-[11px] uppercase tracking-[0.16em]" style=${{ color: 'var(--muted)' }}>面板入口</p>
-                  <div className="space-y-3">
-                    ${actionLinks.map(({ id, title, tag, Icon }) => html`
-                      <a id=${id}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="action-item group flex w-full items-center justify-between rounded-xl border px-3.5 py-3 no-underline transition duration-150"
-                        style=${{ borderColor: 'var(--border)', background: 'var(--panel-soft)', color: 'var(--text)' }}>
-                        <span className="flex min-w-0 items-center gap-2.5">
-                          <${Icon} className="h-4 w-4 shrink-0" style=${{ color: 'var(--accent)' }} />
-                          <span className="min-w-0">
-                            <span className="block text-sm font-medium">${title}</span>
-                            <span className="block truncate text-xs font-mono" style=${{ color: 'var(--muted)' }}>${tag}</span>
-                          </span>
-                        </span>
-                        <span className="flex items-center gap-1 text-xs" style=${{ color: 'var(--muted)' }}>
-                          进入
-                          <${ChevronRight} className="h-4 w-4 transition-transform duration-150 group-hover:translate-x-1" />
-                        </span>
-                      </a>
-                    `)}
-                  </div>
+                  <p class="portal-caption">混合代理地址（HTTP）</p>
+                  <code id="mixed-proxy">http://127.0.0.1:7893</code>
                 </div>
-                <div className="mt-4 rounded-xl border p-4" style=${{ borderColor: 'var(--border)', background: 'var(--panel-soft)' }}>
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-[11px] uppercase tracking-[0.12em]" style=${{ color: 'var(--muted)' }}>剩余流量</p>
-                    <strong id="sub-usage-percent" className="text-sm font-semibold" style=${{ color: 'var(--text)' }}>--%</strong>
-                  </div>
-                  <div className="usage-track mt-2">
-                    <div id="sub-usage-fill" className="usage-fill"></div>
-                  </div>
-                  <div className="mt-2 flex items-start justify-between gap-3">
-                    <p id="sub-usage-numbers" className="min-w-0 text-xs" style=${{ color: 'var(--muted)' }}>--</p>
-                    <p id="sub-expire" className="shrink-0 text-xs" style=${{ color: 'var(--muted)' }}>到期 --</p>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <p className="text-xs" style=${{ color: 'var(--muted)' }}>上次更新：<span id="last-update">-</span></p>
-                    <button id="update-sub" type="button"
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition hover:-translate-y-0.5"
-                      style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}
-                      title="更新订阅"
-                      aria-label="更新订阅">
-                      <span id="update-sub-icon" className="inline-flex items-center justify-center">
-                        <${RefreshCw} className="h-3.5 w-3.5" />
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              </article>
+                <button id="copy-mixed" class="access-button portal-button" type="button" aria-live="polite">复制</button>
+              </div>
             </section>
 
-            <section className="mt-6">
-              <article className="panel rounded-2xl p-6 sm:p-7">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[11px] uppercase tracking-[0.16em]" style=${{ color: 'var(--muted)' }}>连接延时检测</p>
-                  <div className="inline-flex items-center gap-2">
-                    <button id="toggle-latency-mode" className="latency-refresh" type="button" title="切换检测模式">
-                      <span id="latency-mode-icon"></span>
-                    </button>
-                    <button id="refresh-latency" className="latency-refresh" type="button" title="刷新延时">
-                      <${RefreshCw} className="h-4 w-4" />
-                    </button>
-                  </div>
+            <section class="portal-section" aria-labelledby="usage-title">
+              <div class="portal-section-heading">
+                <h2 id="usage-title">订阅状态</h2>
+                <button id="update-sub" class="access-theme-toggle portal-button" type="button" title="更新订阅">
+                  <span id="update-sub-icon" class="portal-icon">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 3v6h-6M3 21v-6h6M3.6 9a9 9 0 0 1 14.9-3L21 9M3 15l2.5 3A9 9 0 0 0 20.4 15"/></svg>
+                  </span>
+                  更新订阅
+                </button>
+              </div>
+              <div class="portal-usage">
+                <div class="portal-usage-heading">
+                  <span class="portal-caption">剩余流量</span>
+                  <strong id="sub-usage-percent">—</strong>
                 </div>
-                <div id="latency-grid" className="mt-3 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4"></div>
-              </article>
+                <div class="usage-track" aria-hidden="true"><div id="sub-usage-fill" class="usage-fill"></div></div>
+                <p id="sub-usage-numbers" class="portal-caption">正在读取流量信息…</p>
+              </div>
+              <dl class="portal-sub-details">
+                <div><dt class="portal-caption">到期日期</dt><dd id="sub-expire">—</dd></div>
+                <div><dt class="portal-caption">上次更新</dt><dd id="last-update">—</dd></div>
+              </dl>
+              <p id="update-feedback" class="access-feedback" role="status" hidden></p>
             </section>
-          </main>
+          </div>
 
-          <div className="modal" id="settings-modal" aria-hidden="true">
-            <div className="modal-backdrop" id="settings-backdrop"></div>
-            <div className="modal-card">
-              <h2 className="mb-3 text-base font-semibold">设置</h2>
-              <div className="grid gap-3">
-                <label className="toggle">
-                  <input type="checkbox" id="auto-enabled" />
-                  <span className="slider"></span>
-                  <span>自动更新</span>
-                </label>
-                <label className="toggle">
-                  <input type="checkbox" id="builtin-enabled" />
-                  <span className="slider"></span>
-                  <span>使用内置规则</span>
-                </label>
-                <label className="auto-field inline-flex items-center gap-2">
-                  自动更新间隔
-                  <input id="auto-minutes" type="number" min="1" max="10080" step="0.5" className="w-24 text-center" />
-                  分钟
-                </label>
+          <section class="portal-section portal-latency" aria-labelledby="latency-title">
+            <div class="portal-section-heading">
+              <h2 id="latency-title">连接延时检测</h2>
+              <div class="portal-latency-actions">
+                <button id="toggle-latency-mode" class="access-theme-toggle portal-button" type="button">
+                  <span id="latency-mode-icon" class="portal-icon"></span>
+                  <span id="latency-mode-label">容器直连</span>
+                </button>
+                <button id="refresh-latency" class="access-theme-toggle portal-button" type="button">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 3v6h-6M3 21v-6h6M3.6 9a9 9 0 0 1 14.9-3L21 9M3 15l2.5 3A9 9 0 0 0 20.4 15"/></svg>
+                  <span id="latency-refresh-label">重新检测</span>
+                </button>
               </div>
-              <div className="mt-5 border-t pt-4" style=${{ borderColor: 'var(--border)' }}>
-                <h3 className="mb-2 text-sm font-semibold">代理认证（可选）</h3>
-                <p className="mb-3 text-xs" style=${{ color: 'var(--muted)' }}>适用于 HTTP、SOCKS 和 Mixed 代理。用户名和密码都留空时，无需认证；与管理密码独立。</p>
-                <div className="grid gap-3">
-                  <label className="field">代理用户名<input id="proxy-username" type="text" maxLength="128" autocomplete="off" placeholder="留空则不启用" /></label>
-                  <label className="field">代理密码<input id="proxy-password" type="password" maxLength="128" autocomplete="new-password" placeholder="留空则不启用" /></label>
+            </div>
+            <ul id="latency-grid" class="portal-latency-grid"></ul>
+            <p id="latency-feedback" class="access-feedback" role="status" hidden></p>
+          </section>
+        </main>
+      </div>
+
+      <div class="modal" id="settings-modal" aria-hidden="true">
+        <div class="modal-backdrop" id="settings-backdrop"></div>
+        <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+          <header class="modal-header"><h2 id="settings-title" class="access-title" tabindex="-1">设置</h2></header>
+          <div class="modal-body">
+            <p id="settings-load" class="access-feedback" role="status" hidden></p>
+            <div id="settings-content" class="modal-stack">
+              <section class="modal-group" aria-labelledby="settings-sub-title">
+                <h3 id="settings-sub-title">订阅更新</h3>
+                <div class="settings-options">
+                  <label class="access-option settings-option">自动更新<input type="checkbox" id="auto-enabled" /></label>
+                  <label class="access-field settings-option">自动更新间隔（分钟）
+                    <input id="auto-minutes" type="number" min="1" max="10080" step="0.5" />
+                  </label>
+                  <label class="access-option settings-option">使用内置规则<input type="checkbox" id="builtin-enabled" /></label>
                 </div>
-              </div>
-              <div className="mt-5 border-t pt-4" style=${{ borderColor: 'var(--border)' }}>
-                <h3 className="mb-2 text-sm font-semibold">修改管理密码</h3>
-                <p id="password-hint" className="mb-3 text-xs" style=${{ color: 'var(--muted)' }}>修改后立即生效，重启后仍可使用。</p>
-                <form id="password-form" className="grid gap-3">
-                  <label className="field">当前密码<input id="current-password" type="password" autocomplete="current-password" required /></label>
-                  <label className="field">新密码<input id="new-password" type="password" autocomplete="new-password" maxLength="128" required /></label>
-                  <label className="field">确认新密码<input id="confirm-password" type="password" autocomplete="new-password" maxLength="128" required /></label>
-                  <p id="password-result" role="status" className="text-xs" style=${{ display: 'none' }}></p>
-                  <button id="change-password" type="submit" className="justify-self-start rounded-lg border px-3 py-1.5 text-xs font-semibold"
-                    style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }}>修改密码</button>
+              </section>
+              <section class="modal-group" aria-labelledby="proxy-auth-title">
+                <h3 id="proxy-auth-title">代理认证</h3>
+                <p class="portal-caption">适用于 HTTP、SOCKS 和 Mixed 代理。两项留空时无需认证。</p>
+                <div class="portal-field-pair">
+                  <label class="access-field">代理用户名<input id="proxy-username" type="text" maxlength="128" autocomplete="off" /></label>
+                  <label class="access-field">代理密码<input id="proxy-password" type="password" maxlength="128" autocomplete="new-password" /></label>
+                </div>
+              </section>
+              <section class="modal-group" aria-labelledby="password-title">
+                <h3 id="password-title">修改管理密码</h3>
+                <form id="password-form" class="access-form">
+                  <label class="access-field">当前密码<input id="current-password" type="password" autocomplete="current-password" required /></label>
+                  <div class="portal-field-pair">
+                    <label class="access-field">新密码<input id="new-password" type="password" autocomplete="new-password" maxlength="128" required /></label>
+                    <label class="access-field">确认新密码<input id="confirm-password" type="password" autocomplete="new-password" maxlength="128" required /></label>
+                  </div>
+                  <p id="password-result" class="access-feedback" role="status" hidden></p>
+                  <div class="password-actions">
+                    <button id="change-password" type="submit" class="access-theme-toggle portal-button" aria-describedby="password-scope">修改密码</button>
+                    <p id="password-scope" class="portal-caption">密码单独提交，修改后立即生效。</p>
+                  </div>
                 </form>
-              </div>
-              <p id="settings-error" role="status" className="error mt-3" style=${{ display: 'none' }}></p>
-              <div className="modal-actions">
-                <button className="rounded-lg border px-3 py-1.5 text-xs" style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }} id="close-settings">取消</button>
-                <button className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-white" style=${{ borderColor: 'var(--accent-strong)', background: 'var(--accent-strong)' }} id="save-settings">保存</button>
-              </div>
+              </section>
             </div>
           </div>
+          <footer class="modal-footer">
+            <p id="settings-error" class="access-feedback" role="status" hidden></p>
+            <div class="modal-actions">
+              <button id="close-settings" class="access-theme-toggle portal-button" type="button">取消</button>
+              <button id="save-settings" class="access-button portal-button" type="button">保存设置</button>
+            </div>
+          </footer>
+        </section>
+      </div>
 
-          <div className="modal" id="subs-modal" aria-hidden="true">
-            <div className="modal-backdrop" id="subs-backdrop"></div>
-            <div className="modal-card">
-              <h2 className="mb-3 text-base font-semibold">订阅管理</h2>
-              <div className="grid gap-3">
-                <label className="field">
-                  订阅链接
-                  <div className="flex gap-2">
-                    <input id="subs-input" type="text" placeholder="https://example.com/sub.yaml" />
-                    <button id="add-sub" type="button" className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-white"
-                      style=${{ borderColor: 'var(--accent-strong)', background: 'var(--accent-strong)', whiteSpace: 'nowrap' }}>导入</button>
-                  </div>
-                </label>
-                <div className="field">
-                  已保存订阅
-                  <div id="subs-list" className="grid gap-2"></div>
+      <div class="modal" id="subs-modal" aria-hidden="true">
+        <div class="modal-backdrop" id="subs-backdrop"></div>
+        <section class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="subs-title">
+          <header class="modal-header"><h2 id="subs-title" class="access-title" tabindex="-1">订阅管理</h2></header>
+          <div class="modal-body modal-stack">
+            <div class="modal-group" id="subs-editor">
+              <div class="access-field">
+                <label for="subs-input">订阅链接</label>
+                <div class="subscription-input-row">
+                  <input id="subs-input" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" />
+                  <button id="add-sub" type="button" class="access-theme-toggle portal-button">导入</button>
                 </div>
-                <div className="help" id="subs-help">仅在订阅链接有效时允许导入。保存后默认直接切换本地缓存；手动更新仅更新当前订阅，自动更新会更新全部订阅。</div>
-                <div className="error" id="subs-error" style=${{ display: 'none' }}></div>
               </div>
-              <div className="modal-actions">
-                <button className="rounded-lg border px-3 py-1.5 text-xs" style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }} id="close-subs">取消</button>
-                <button className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-white" style=${{ borderColor: 'var(--accent-strong)', background: 'var(--accent-strong)' }} id="save-subs">保存</button>
-              </div>
-            </div>
-          </div>
-
-          <div className="modal" id="about-modal" aria-hidden="true">
-            <div className="modal-backdrop" id="about-backdrop"></div>
-            <div className="modal-card compact">
-              <h2 className="mb-3 text-base font-semibold">关于</h2>
-              <div className="grid gap-2.5 text-sm">
-                <p style=${{ color: 'var(--muted)' }}>
-                  项目版本：<span id="about-project-version" className="font-mono" style=${{ color: 'var(--text)' }}>--</span>
-                </p>
-                <p style=${{ color: 'var(--muted)' }}>
-                  Mihomo内核版本：<span id="about-core-version" className="font-mono" style=${{ color: 'var(--text)' }}>--</span>
-                </p>
-                <a href="https://github.com/MetaCubeX/mihomo" target="_blank" rel="noreferrer"
-                  className="inline-flex items-center gap-2 no-underline"
-                  style=${{ color: 'var(--text)' }}>
-                  <${GithubMark} className="h-5 w-5 shrink-0" />
-                  <span style=${{ color: 'var(--accent)' }}>Mihomo内核仓库</span>
-                </a>
-                <a href="https://github.com/bctjo/docker-clash" target="_blank" rel="noreferrer"
-                  className="inline-flex items-center gap-2 no-underline"
-                  style=${{ color: 'var(--text)' }}>
-                  <${GithubMark} className="h-5 w-5 shrink-0" />
-                  <span style=${{ color: 'var(--accent)' }}>本项目仓库</span>
-                </a>
-              </div>
-              <div className="modal-actions">
-                <button className="rounded-lg border px-3 py-1.5 text-xs" style=${{ borderColor: 'var(--border)', background: 'var(--panel)', color: 'var(--text)' }} id="close-about">关闭</button>
+              <div class="access-field">
+                <label for="subs-file">本地 YAML 文件</label>
+                <div class="subscription-input-row">
+                  <input id="subs-file" type="file" accept=".yaml,.yml" aria-describedby="subs-help" />
+                  <button id="upload-sub" type="button" class="access-theme-toggle portal-button">上传 YAML</button>
+                </div>
+                <p class="portal-caption" id="subs-file-name" hidden></p>
+                <p class="portal-caption" id="subs-help">支持 .yaml 和 .yml，最大 16 MiB。</p>
               </div>
             </div>
+            <section class="modal-group" aria-labelledby="subs-list-title">
+              <h3 id="subs-list-title">已保存订阅</h3>
+              <div id="subs-list" class="subscription-list"></div>
+            </section>
           </div>
+          <footer class="modal-footer">
+            <p id="subs-error" class="access-feedback" role="status" hidden></p>
+            <div class="modal-actions">
+              <button id="close-subs" class="access-theme-toggle portal-button" type="button">取消</button>
+              <button id="save-subs" class="access-button portal-button" type="button">保存</button>
+            </div>
+          </footer>
+        </section>
+      </div>
 
-          <div className="modal" id="admin-modal" aria-hidden="true">
-            <div className="modal-backdrop" id="admin-backdrop"></div>
-            <div className="modal-card compact">
-              <h2 className="mb-3 text-base font-semibold">管理密钥</h2>
-              <div className="grid gap-3">
-                <label className="field">
-                  请输入管理密钥
-                  <input id="admin-key" type="password" placeholder="管理密钥" autocomplete="current-password" />
-                </label>
-                <div className="error" id="admin-error" style=${{ display: 'none' }}></div>
-              </div>
-              <div className="modal-actions">
-                <button className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-white" style=${{ borderColor: 'var(--accent-strong)', background: 'var(--accent-strong)' }} id="admin-confirm">确认</button>
-              </div>
+      <div class="modal" id="about-modal" aria-hidden="true">
+        <div class="modal-backdrop" id="about-backdrop"></div>
+        <section class="modal-card compact" role="dialog" aria-modal="true" aria-labelledby="about-title">
+          <header class="modal-header"><h2 id="about-title" class="access-title" tabindex="-1">关于 Clash Portal</h2></header>
+          <div class="modal-body modal-stack">
+            <dl class="about-versions">
+              <div><dt>项目版本</dt><dd id="about-project-version" aria-live="polite">—</dd></div>
+              <div><dt>Mihomo 内核版本</dt><dd id="about-core-version" aria-live="polite">—</dd></div>
+            </dl>
+            <div class="about-links">
+              <a href="https://github.com/bctjo/docker-clash" target="_blank" rel="noreferrer">本项目仓库 <span aria-hidden="true">↗</span></a>
+              <a href="https://github.com/MetaCubeX/mihomo" target="_blank" rel="noreferrer">Mihomo 内核仓库 <span aria-hidden="true">↗</span></a>
             </div>
           </div>
-        `;
-      }
-
-      const root = ReactDOM.createRoot(document.getElementById('app'));
-      ReactDOM.flushSync(() => {
-        root.render(html`<${App} />`);
-      });
-      window.__PORTAL_READY__ = Promise.resolve();
-    </script>
+          <footer class="modal-footer">
+            <div class="modal-actions">
+              <button id="close-about" class="access-theme-toggle portal-button" type="button">关闭</button>
+            </div>
+          </footer>
+        </section>
+      </div>
+    </div>
 
     <script type="module">
-      await window.__PORTAL_READY__;
+      import { basicAuth, createAccess, readYamlUpload } from "./setup.js";
+
+      const access = createAccess();
       const config = window.__PORTAL_CONFIG__ || {};
       const host = window.location.hostname || '127.0.0.1';
       const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
       const themeStorageKey = 'portalTheme';
       const themeToggle = document.getElementById('theme-toggle');
       const themeLabel = document.getElementById('theme-label');
-      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-      let activeTheme = localStorage.getItem(themeStorageKey) || (prefersDark ? 'dark' : 'light');
+      const accessThemeToggle = document.getElementById('access-theme-toggle');
+      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+      let activeTheme = document.documentElement.dataset.theme;
 
       const applyTheme = (theme) => {
         activeTheme = theme;
         document.documentElement.setAttribute('data-theme', theme);
-        if (themeLabel) themeLabel.textContent = theme === 'dark' ? '深色' : '浅色';
+        themeLabel.textContent = theme === 'dark' ? '浅色模式' : '深色模式';
+        accessThemeToggle.textContent = theme === 'dark' ? '浅色模式' : '深色模式';
       };
 
       applyTheme(activeTheme);
-      if (themeToggle) {
-        themeToggle.addEventListener('click', () => {
+      for (const toggle of [themeToggle, accessThemeToggle]) {
+        toggle.addEventListener('click', () => {
           const nextTheme = activeTheme === 'dark' ? 'light' : 'dark';
           localStorage.setItem(themeStorageKey, nextTheme);
           applyTheme(nextTheme);
         });
       }
+      systemTheme.addEventListener('change', (event) => {
+        if (!localStorage.getItem(themeStorageKey)) applyTheme(event.matches ? 'dark' : 'light');
+      });
 
       const portalPort = window.location.port || (protocol === 'https' ? '443' : '80');
       const httpPort = config.httpPort || '7890';
@@ -727,8 +362,6 @@
       const mixedPort = config.mixedPort || '7893';
       let secret = '';
       const updateIntervalSec = Number(config.updateIntervalSec || '0');
-      const adminAuthEnabled = config.adminAuthEnabled === true;
-      const adminStorageKey = 'portalAdminKey';
       let passwordChangeInProgress = false;
 
       const portalPortEl = document.getElementById('portal-port');
@@ -747,7 +380,7 @@
         ];
 
         info.innerHTML = rows
-          .map((item) => `<div class="kv"><span>${item.label}</span><strong>${escapeHtml(item.value)}</strong></div>`)
+          .map((item) => `<div><dt>${item.label}</dt><dd>${escapeHtml(item.value)}</dd></div>`)
           .join('');
 
         const baseQuery = new URLSearchParams({
@@ -806,6 +439,7 @@
       const lastUpdateEl = document.getElementById('last-update');
       const updateBtn = document.getElementById('update-sub');
       const updateBtnIcon = document.getElementById('update-sub-icon');
+      const updateFeedback = document.getElementById('update-feedback');
       const subUsageFillEl = document.getElementById('sub-usage-fill');
       const subUsagePercentEl = document.getElementById('sub-usage-percent');
       const subUsageNumbersEl = document.getElementById('sub-usage-numbers');
@@ -814,7 +448,10 @@
       const aboutCoreVersionEl = document.getElementById('about-core-version');
       const latencyModeBtn = document.getElementById('toggle-latency-mode');
       const latencyModeIcon = document.getElementById('latency-mode-icon');
+      const latencyModeLabel = document.getElementById('latency-mode-label');
       const refreshLatencyBtn = document.getElementById('refresh-latency');
+      const latencyRefreshLabel = document.getElementById('latency-refresh-label');
+      const latencyFeedback = document.getElementById('latency-feedback');
       const latencyGrid = document.getElementById('latency-grid');
       const latencyModeStorageKey = 'latencyMode';
       const defaultLatencySites = [
@@ -838,7 +475,9 @@
 
       const applyLatencyModeUI = () => {
         latencyModeIcon.innerHTML = latencyMode === 'router' ? routerModeSvg : browserModeSvg;
-        latencyModeBtn.title = latencyMode === 'router' ? '当前：代理规则检测' : '当前：容器直连检测';
+        latencyModeLabel.textContent = latencyMode === 'router' ? '代理规则' : '容器直连';
+        latencyModeBtn.title = latencyMode === 'router' ? '切换为容器直连检测' : '切换为代理规则检测';
+        latencyModeBtn.setAttribute('aria-label', `检测模式：${latencyModeLabel.textContent}。${latencyModeBtn.title}`);
       };
 
       const latencyLogoSvg = (key) => {
@@ -862,128 +501,98 @@
           sites = defaultLatencySites;
         }
         latencyGrid.innerHTML = sites.map((site) => {
-          const latency = Number(site.latencyMs);
-          const hasLatency = Number.isFinite(latency) && latency >= 0;
-          const reachable = typeof site.reachable === 'boolean' ? site.reachable : null;
-          const latencyText = pending ? '检测中' : (hasLatency ? `${latency} ms` : (reachable === false ? '超时' : '检测中'));
-          const statusColor = pending
-            ? '#94a3b8'
-            : (reachable === true ? '#16a34a' : (reachable === false ? '#ef4444' : '#94a3b8'));
+          const hasLatency = Number.isFinite(site.latencyMs) && site.latencyMs >= 0;
+          const failed = site.reachable === false;
+          const latencyText = pending ? '检测中…' : hasLatency ? `${site.latencyMs} ms` : failed ? '超时' : '待检测';
+          const status = pending ? '' : failed ? 'error' : site.reachable === true ? 'success' : '';
           const logo = latencyLogoSvg(site.key);
           return `
-            <div class="latency-card">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-                <span style="display:flex;align-items:center;gap:8px;min-width:0;">
-                  <span class="latency-logo">${logo}</span>
-                  <span style="font-size:0.9rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(site.name || '-')}</span>
-                </span>
-                <span style="font-family:'JetBrains Mono','SFMono-Regular',Menlo,monospace;font-size:0.85rem;font-weight:650;color:${statusColor};">${latencyText}</span>
-              </div>
-            </div>`;
+            <li class="latency-item">
+              <span class="latency-site"><span class="latency-logo">${logo}</span>${escapeHtml(site.name || '—')}</span>
+              <span class="latency-value" data-status="${status}">${latencyText}</span>
+            </li>`;
         }).join('');
       };
 
-      const passwordHeader = (key) => {
-        const token = btoa(String.fromCharCode(...new TextEncoder().encode(`admin:${key}`)));
-        return { Authorization: `Basic ${token}` };
-      };
-      const getAdminHeader = () => {
-        if (!adminAuthEnabled) return {};
-        const key = sessionStorage.getItem(adminStorageKey);
-        if (!key) return {};
-        return passwordHeader(key);
+      const showFeedback = (element, message = '', error = false) => {
+        element.textContent = message;
+        element.dataset.error = String(error);
+        element.hidden = !message;
       };
 
-      const adminModal = document.getElementById('admin-modal');
-      const adminBackdrop = document.getElementById('admin-backdrop');
-      const adminKeyInput = document.getElementById('admin-key');
-      const adminConfirm = document.getElementById('admin-confirm');
-      const adminError = document.getElementById('admin-error');
-      let adminResolve = null;
-      let adminPromptPromise = null;
+      const app = document.getElementById('app');
+      const portalShell = document.getElementById('portal-shell');
+      let activeDialog;
 
-      const openAdminModal = () => {
-        adminModal.classList.add('open');
-        adminModal.setAttribute('aria-hidden', 'false');
-        adminError.style.display = 'none';
-        adminKeyInput.value = '';
-        setTimeout(() => adminKeyInput.focus(), 0);
-      };
-      const closeAdminModal = () => {
-        adminModal.classList.remove('open');
-        adminModal.setAttribute('aria-hidden', 'true');
-      };
+      document.getElementById('logout').addEventListener('click', () => {
+        access.clearSession();
+        app.hidden = true;
+        window.location.reload();
+      });
 
-      const requestAdminKey = (errorText = '') => {
-        if (!adminAuthEnabled) return Promise.resolve(false);
-        if (adminPromptPromise) {
-          if (errorText) {
-            adminError.textContent = errorText;
-            adminError.style.display = 'block';
+      const registerDialog = (modal, opener, close, backdrop, canClose, onClose = () => {}) => {
+        const heading = modal.querySelector('h2');
+        const dismiss = () => {
+          if (activeDialog?.modal !== modal || !canClose()) return;
+          activeDialog = undefined;
+          modal.classList.remove('open');
+          modal.setAttribute('aria-hidden', 'true');
+          opener.setAttribute('aria-expanded', 'false');
+          portalShell.inert = false;
+          onClose();
+          if (!app.hidden) opener.focus();
+        };
+        close.addEventListener('click', dismiss);
+        backdrop.addEventListener('click', dismiss);
+        modal.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            dismiss();
           }
-          return adminPromptPromise;
-        }
-        openAdminModal();
-        if (errorText) {
-          adminError.textContent = errorText;
-          adminError.style.display = 'block';
-        }
-        adminPromptPromise = new Promise((resolve) => {
-          adminResolve = resolve;
+          if (event.key !== 'Tab') return;
+          const controls = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled), a[href]')]
+            .filter((control) => control.getClientRects().length);
+          const edge = event.shiftKey ? controls.at(-1) : controls[0];
+          const boundary = event.shiftKey ? controls[0] : controls.at(-1);
+          if (document.activeElement === boundary || (event.shiftKey && document.activeElement === heading)) {
+            event.preventDefault();
+            edge?.focus();
+          }
         });
-        return adminPromptPromise;
+        opener.setAttribute('aria-expanded', 'false');
+        return {
+          show() {
+            if (activeDialog) return false;
+            activeDialog = { modal, heading };
+            portalShell.inert = true;
+            opener.setAttribute('aria-expanded', 'true');
+            modal.classList.add('open');
+            modal.setAttribute('aria-hidden', 'false');
+            modal.querySelector('.modal-body').scrollTop = 0;
+            heading.focus();
+            return activeDialog;
+          },
+          dismiss
+        };
       };
 
-      const submitAdminKey = () => {
-        const key = adminKeyInput.value;
-        if (!key.trim()) {
-          adminError.textContent = '请输入管理密钥。';
-          adminError.style.display = 'block';
-          return;
-        }
-        sessionStorage.setItem(adminStorageKey, key);
-        closeAdminModal();
-        if (adminResolve) {
-          adminResolve(true);
-          adminResolve = null;
-        }
-        adminPromptPromise = null;
+      const requireLogin = async (message) => {
+        const dialog = activeDialog;
+        await access.requireLogin(message);
+        if (dialog && activeDialog === dialog) dialog.heading.focus();
       };
-
-      adminConfirm.addEventListener('click', submitAdminKey);
-      adminBackdrop.addEventListener('click', () => {
-        adminError.textContent = '请输入管理密钥后继续。';
-        adminError.style.display = 'block';
-        setTimeout(() => adminKeyInput.focus(), 0);
-      });
-      adminKeyInput.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-          submitAdminKey();
-        }
-      });
 
       const fetchWithAuth = async (url, options = {}, allowPrompt = true) => {
-        const isAuthFailed = (status) => status === 401 || status === 403;
-        const maxAttempts = adminAuthEnabled && allowPrompt ? 3 : 1;
-        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-          if (adminAuthEnabled && !sessionStorage.getItem(adminStorageKey) && allowPrompt) {
-            const promptText = attempt > 0 ? '管理密钥错误，请重试。' : '';
-            const ok = await requestAdminKey(promptText);
-            if (!ok) {
-              return new Response(null, { status: 403 });
-            }
-          }
-          const keyAtRequest = sessionStorage.getItem(adminStorageKey);
-          const headers = { ...(options.headers || {}), ...getAdminHeader() };
-          const res = await fetch(url, { ...options, headers });
-          if (!isAuthFailed(res.status) || !adminAuthEnabled || !allowPrompt) {
-            return res;
-          }
-          if (passwordChangeInProgress) return res;
-          if (keyAtRequest !== sessionStorage.getItem(adminStorageKey)) continue;
-          sessionStorage.removeItem(adminStorageKey);
+        if (allowPrompt && !access.readSession()) await requireLogin();
+        const authorization = access.headers();
+        const send = (headers) => fetch(url, { ...options, headers: { ...options.headers, ...headers } });
+        const response = await send(authorization);
+        if (![401, 403].includes(response.status) || !allowPrompt || passwordChangeInProgress) return response;
+        if (authorization.Authorization === access.headers().Authorization) {
+          access.clearSession();
+          await requireLogin('用户名或密码错误，请重新登录。');
         }
-        return new Response(null, { status: 403 });
+        return send(access.headers());
       };
 
       let lastUpdateAtMs = null;
@@ -1088,10 +697,10 @@
 
       const renderSubscriptionInfoUnknown = (note = '暂无订阅流量信息') => {
         subUsageFillEl.style.width = '0%';
-        subUsageFillEl.style.background = 'linear-gradient(90deg, #94a3b8 0%, #64748b 100%)';
-        subUsagePercentEl.textContent = '--%';
+        subUsageFillEl.dataset.low = 'false';
+        subUsagePercentEl.textContent = '—';
         subUsageNumbersEl.textContent = note;
-        subExpireEl.textContent = '到期 --';
+        subExpireEl.textContent = '—';
       };
 
       const renderSubscriptionInfo = (info) => {
@@ -1107,12 +716,10 @@
         }
         const remainingPercent = total > 0 ? Math.max(0, Math.min(100, Math.round((remaining * 100) / total))) : 0;
         subUsageFillEl.style.width = `${remainingPercent}%`;
-        subUsageFillEl.style.background = remainingPercent <= 10
-          ? 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)'
-          : 'linear-gradient(90deg, #22c55e 0%, #16a34a 100%)';
+        subUsageFillEl.dataset.low = String(remainingPercent <= 10);
         subUsagePercentEl.textContent = `${remainingPercent}%`;
         subUsageNumbersEl.textContent = `剩余 ${formatBytes(remaining)} / 总量 ${formatBytes(total)}`;
-        subExpireEl.textContent = `到期 ${formatExpireDate(info.expireAtShanghai)}`;
+        subExpireEl.textContent = formatExpireDate(info.expireAtShanghai);
         return true;
       };
 
@@ -1123,7 +730,7 @@
       const isSubscriptionInfoLocked = () => Date.now() < subscriptionInfoLockedUntil;
 
       const formatExpireDate = (value) => {
-        if (!value) return '--';
+        if (!value) return '—';
         const raw = String(value).trim();
         const dateMatch = raw.match(/\d{4}-\d{2}-\d{2}/);
         if (dateMatch) return dateMatch[0];
@@ -1174,7 +781,7 @@
           const version = data.version || data.mihomo || '--';
           aboutCoreVersionEl.textContent = version;
         } catch (err) {
-          aboutCoreVersionEl.textContent = '--';
+          aboutCoreVersionEl.textContent = '读取失败';
         }
       };
 
@@ -1189,7 +796,7 @@
           const revision = revisionRaw && revisionRaw !== 'unknown' ? revisionRaw.slice(0, 12) : '';
           aboutProjectVersionEl.textContent = revision ? `${version} (${revision})` : version;
         } catch (err) {
-          aboutProjectVersionEl.textContent = '--';
+          aboutProjectVersionEl.textContent = '读取失败';
         }
       };
 
@@ -1200,7 +807,6 @@
           if (!res.ok) throw new Error('latency');
           const data = await res.json();
           if (expectedRequestId && data.requestId !== expectedRequestId) return null;
-          if (data.state === 'failed') { refreshLatencyBtn.title = data.message; }
           const sites = Array.isArray(data.sites) ? data.sites : [];
           if (sites.length) {
             latencyCache[mode] = sites;
@@ -1210,9 +816,6 @@
           }
           return data;
         } catch (err) {
-          if (mode === latencyMode) {
-            renderLatencyItems([], false, mode);
-          }
           return null;
         }
       };
@@ -1236,27 +839,29 @@
         if (updateBtn.disabled) return;
         const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
         updateBtn.disabled = true;
-        updateBtn.style.opacity = '0.55';
-        updateBtn.title = '等待后台处理...';
-        if (updateBtnIcon) updateBtnIcon.classList.add('animate-spin');
+        updateBtn.title = '正在更新订阅…';
+        showFeedback(updateFeedback, updateBtn.title);
+        updateBtnIcon.classList.add('is-spinning');
         try {
           const res = await fetchWithAuth(`/requests/updates/${requestId}`, {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ scope: 'active' })
           });
           if (!res.ok) throw new Error('无法提交更新请求');
-          await waitForTask(requestId, (message) => { updateBtn.title = message; });
+          await waitForTask(requestId, (message) => {
+            updateBtn.title = message;
+            showFeedback(updateFeedback, message);
+          });
           lastUpdateLocked = false;
           await refreshSubscriptionsUI();
           await fetchStatus();
           await fetchSubscriptionInfo();
         } catch (err) {
           updateBtn.title = err.message || '更新失败';
-          lastUpdateEl.textContent = err.message || '更新失败';
+          showFeedback(updateFeedback, updateBtn.title, true);
         } finally {
-          updateBtn.disabled = false;
-          updateBtn.style.opacity = '1';
-          if (updateBtnIcon) updateBtnIcon.classList.remove('animate-spin');
+          updateBtn.disabled = lastSubscriptionsSnapshot.loaded && !lastSubscriptionsSnapshot.entries.length;
+          updateBtnIcon.classList.remove('is-spinning');
         }
       };
 
@@ -1266,6 +871,7 @@
         latencyMode = latencyMode === 'router' ? 'browser' : 'router';
         localStorage.setItem(latencyModeStorageKey, latencyMode);
         applyLatencyModeUI();
+        if (latencyRefreshing) renderLatencyItems([], true);
         await triggerLatencyRefresh();
       };
 
@@ -1277,33 +883,33 @@
         const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
         latencyRefreshing = true;
         refreshLatencyBtn.disabled = true;
+        latencyRefreshLabel.textContent = '检测中…';
+        showFeedback(latencyFeedback);
+        renderLatencyItems([], true, refreshMode);
         try {
           const refreshPath = `/requests/latency-${refreshMode}/${requestId}`;
           const res = await fetchWithAuth(refreshPath, { method: 'PUT', body: '1' });
-          if (!res.ok) throw new Error('latency-refresh');
-          if (refreshMode === latencyMode) {
-            renderLatencyItems([], true, refreshMode);
+          if (!res.ok) throw new Error('无法发起延时检测，请重试。');
+          for (let i = 0; i < 180; i += 1) {
+            await sleep(1000);
+            const data = await fetchLatency(refreshMode, requestId);
+            if (!data) continue;
+            if (data.state === 'failed' || data.error) throw new Error(data.message || data.error || '延时检测失败。');
+            return;
           }
+          throw new Error('等待延时检测结果超时，请重试。');
         } catch (err) {
+          await fetchLatency(refreshMode);
+          if (refreshMode === latencyMode) {
+            renderLatencyItems([], false, refreshMode);
+            showFeedback(latencyFeedback, err.message || '延时检测失败，请重试。', true);
+          }
+        } finally {
           latencyRefreshing = false;
           refreshLatencyBtn.disabled = false;
-          await fetchLatency(refreshMode);
-          return;
+          latencyRefreshLabel.textContent = '重新检测';
+          if (refreshMode !== latencyMode) triggerLatencyRefresh();
         }
-        let hasData = false;
-        for (let i = 0; i < 180; i += 1) {
-          await sleep(1000);
-          const data = await fetchLatency(refreshMode, requestId);
-          if (data && data.requestId === requestId) {
-            hasData = true;
-            break;
-          }
-        }
-        if (!hasData && refreshMode === latencyMode) {
-          renderLatencyItems([], false, refreshMode);
-        }
-        latencyRefreshing = false;
-        refreshLatencyBtn.disabled = false;
       };
 
       refreshLatencyBtn.addEventListener('click', triggerLatencyRefresh);
@@ -1315,24 +921,36 @@
       const subsBackdrop = document.getElementById('subs-backdrop');
       const subsInput = document.getElementById('subs-input');
       const addSubBtn = document.getElementById('add-sub');
+      const subsFile = document.getElementById('subs-file');
+      const subsFileName = document.getElementById('subs-file-name');
+      const uploadSubBtn = document.getElementById('upload-sub');
       const subsList = document.getElementById('subs-list');
+      const subsEditor = document.getElementById('subs-editor');
       const subsError = document.getElementById('subs-error');
-      let subsRequired = false;
       let subsEntries = [];
       let subsActiveIndex = 0;
       let subsEditingIndex = -1;
+      let subsImporting = false;
+      let subsSaving = false;
+      const isLocalSubscription = (url) => /^local:[0-9a-f]{64}$/.test(url);
 
-      const openSubsModal = (required = false) => {
-        subsRequired = required;
-        subsModal.classList.add('open');
-        subsModal.setAttribute('aria-hidden', 'false');
-        closeSubs.style.display = '';
-        closeSubs.textContent = subsRequired ? '稍后配置' : '取消';
+      const showSubscriptionFileName = () => {
+        const name = subsFile.files[0]?.name;
+        subsFileName.textContent = name || '';
+        subsFileName.hidden = !name;
       };
-      const closeSubsModal = () => {
-        subsModal.classList.remove('open');
-        subsModal.setAttribute('aria-hidden', 'true');
+      subsFile.addEventListener('change', showSubscriptionFileName);
+
+      const resetSubscriptionEditor = () => {
+        subsEditingIndex = -1;
+        subsInput.value = '';
+        subsFile.value = '';
+        showSubscriptionFileName();
+        addSubBtn.textContent = '导入';
+        uploadSubBtn.textContent = '上传 YAML';
       };
+
+      const subsDialog = registerDialog(subsModal, openSubs, closeSubs, subsBackdrop, () => !subsImporting && !subsSaving);
 
       const inferNameFromUrl = (url) => {
         try {
@@ -1367,31 +985,21 @@
       };
 
       const normalizeSubscriptionData = (data) => {
-        const urls = Array.isArray(data.urls) ? data.urls.filter((u) => typeof u === 'string' && u.trim()) : [];
         const items = Array.isArray(data.items) ? data.items : [];
-        const entries = items
-          .map((item) => ({
-            name: (typeof item.name === 'string' && item.name.trim()) ? decodeMaybePercentName(item.name.trim()) : '',
-            url: typeof item.url === 'string' ? item.url.trim() : '',
-            updatedAtShanghai: (typeof item.updatedAtShanghai === 'string' && item.updatedAtShanghai)
-              ? item.updatedAtShanghai
-              : (typeof item.checkedAtShanghai === 'string' ? item.checkedAtShanghai : ''),
-            subscriptionInfo: (item && typeof item.subscriptionInfo === 'object') ? item.subscriptionInfo : null,
-            lastError: typeof item.lastError === 'string' ? item.lastError : ''
-          }))
-          .filter((item) => item.url.length > 0);
-
-        if (!entries.length) {
-          urls.forEach((url) => {
-            entries.push({
-              name: inferNameFromUrl(url),
-              url,
-              updatedAtShanghai: '',
-              subscriptionInfo: null,
-              lastError: ''
-            });
-          });
-        }
+        const byUrl = new Map(items.filter((item) => typeof item?.url === 'string').map((item) => [item.url.trim(), item]));
+        const urls = Array.isArray(data.urls) ? data.urls.filter((url) => typeof url === 'string' && url.trim()) : [...byUrl.keys()];
+        const entries = urls.map((value) => {
+          const url = value.trim();
+          const item = byUrl.get(url) || {};
+          const local = isLocalSubscription(url);
+          return {
+            name: (local ? item.name : decodeMaybePercentName(item.name)) || (local ? '本地 YAML' : inferNameFromUrl(url)),
+            url,
+            updatedAtShanghai: item.updatedAtShanghai || item.checkedAtShanghai || '',
+            subscriptionInfo: item.subscriptionInfo || null,
+            lastError: item.lastError || ''
+          };
+        });
 
         const activeRaw = Number.isFinite(data.active) ? data.active : Number.parseInt(data.active, 10);
         const active = Number.isFinite(activeRaw) ? activeRaw : 0;
@@ -1426,110 +1034,98 @@
         subsList.innerHTML = '';
         if (!subsEntries.length) {
           const empty = document.createElement('div');
-          empty.className = 'help';
-          empty.textContent = '暂无订阅，请先输入订阅链接并加入。';
+          empty.className = 'portal-caption';
+          empty.textContent = '暂无订阅，请导入订阅链接或上传 YAML 文件。';
           subsList.appendChild(empty);
           return;
         }
 
         subsEntries.forEach((entry, idx) => {
           const row = document.createElement('div');
-          row.className = 'rounded-lg border p-2';
-          row.style.borderColor = 'var(--border)';
-          row.style.background = 'var(--panel-soft)';
-          row.style.overflow = 'hidden';
+          row.className = 'subscription-row';
 
-          const header = document.createElement('div');
-          header.className = 'flex items-center justify-between gap-2';
-          header.style.minWidth = '0';
-          header.style.alignItems = 'flex-start';
+          const details = document.createElement('div');
+          details.className = 'subscription-row-details';
 
           const title = document.createElement('div');
-          title.className = 'text-sm font-semibold';
-          title.style.color = 'var(--text)';
-          title.style.flex = '1 1 auto';
-          title.style.minWidth = '0';
-          title.style.whiteSpace = 'nowrap';
-          title.style.overflow = 'hidden';
-          title.style.textOverflow = 'ellipsis';
-          const displayName = decodeMaybePercentName(entry.name || inferNameFromUrl(entry.url));
+          title.className = 'subscription-row-title';
+          const local = isLocalSubscription(entry.url);
+          const displayName = local ? entry.name : decodeMaybePercentName(entry.name || inferNameFromUrl(entry.url));
           title.textContent = displayName;
           title.title = displayName;
 
           const actions = document.createElement('div');
-          actions.className = 'flex items-center gap-1';
-          actions.style.flexShrink = '0';
-          actions.style.flexWrap = 'wrap';
-          actions.style.justifyContent = 'flex-end';
+          actions.className = 'subscription-row-actions';
 
           const useBtn = document.createElement('button');
           useBtn.type = 'button';
-          useBtn.className = 'rounded border px-2 py-1 text-xs';
-          useBtn.style.borderColor = idx === subsActiveIndex ? 'var(--accent-strong)' : 'var(--border)';
-          useBtn.style.background = idx === subsActiveIndex ? 'color-mix(in oklab, var(--accent) 18%, var(--panel-soft))' : 'var(--panel)';
+          useBtn.className = 'access-theme-toggle portal-button';
+          useBtn.classList.toggle('is-current', idx === subsActiveIndex);
+          useBtn.setAttribute('aria-pressed', String(idx === subsActiveIndex));
           useBtn.textContent = idx === subsActiveIndex ? '当前使用' : '设为当前';
           useBtn.addEventListener('click', () => {
             subsActiveIndex = idx;
             renderSubscriptionsList();
+            subsList.children[idx].querySelector('button').focus();
           });
 
           const editBtn = document.createElement('button');
           editBtn.type = 'button';
-          editBtn.className = 'rounded border px-2 py-1 text-xs';
-          editBtn.style.borderColor = 'var(--border)';
-          editBtn.style.background = 'var(--panel)';
-          editBtn.textContent = '编辑';
+          editBtn.className = 'access-theme-toggle portal-button';
+          editBtn.textContent = local ? '替换文件' : '编辑';
           editBtn.addEventListener('click', () => {
-            subsInput.value = entry.url;
+            resetSubscriptionEditor();
             subsEditingIndex = idx;
-            addSubBtn.textContent = '更新导入';
-            subsError.textContent = `正在编辑：${decodeMaybePercentName(entry.name || inferNameFromUrl(entry.url))}`;
-            subsError.style.display = 'block';
+            if (local) {
+              uploadSubBtn.textContent = '上传并替换';
+              subsFile.focus();
+              subsFile.click();
+            } else {
+              subsInput.value = entry.url;
+              addSubBtn.textContent = '更新导入';
+              subsInput.focus();
+            }
+            showFeedback(subsError, `正在编辑：${displayName}`);
           });
 
           const deleteBtn = document.createElement('button');
           deleteBtn.type = 'button';
-          deleteBtn.className = 'rounded border px-2 py-1 text-xs';
-          deleteBtn.style.borderColor = 'var(--border)';
-          deleteBtn.style.background = 'var(--panel)';
+          deleteBtn.className = 'access-theme-toggle portal-button';
           deleteBtn.textContent = '删除';
           deleteBtn.addEventListener('click', () => {
             subsEntries.splice(idx, 1);
+            if (idx < subsActiveIndex) subsActiveIndex -= 1;
             if (subsActiveIndex >= subsEntries.length) {
               subsActiveIndex = Math.max(0, subsEntries.length - 1);
             }
             if (subsEditingIndex === idx) {
-              subsEditingIndex = -1;
-              subsInput.value = '';
-              addSubBtn.textContent = '导入';
+              resetSubscriptionEditor();
             } else if (subsEditingIndex > idx) {
               subsEditingIndex -= 1;
             }
             renderSubscriptionsList();
+            const nextRow = subsList.children[Math.min(idx, subsEntries.length - 1)];
+            (nextRow?.querySelector('button') || subsInput).focus();
           });
 
+          for (const button of [useBtn, editBtn, deleteBtn]) button.disabled = subsImporting || subsSaving;
           actions.appendChild(useBtn);
           actions.appendChild(editBtn);
           actions.appendChild(deleteBtn);
-          header.appendChild(title);
-          header.appendChild(actions);
 
           const urlEl = document.createElement('div');
-          urlEl.className = 'mt-1 text-xs font-mono';
-          urlEl.style.color = 'var(--muted)';
-          urlEl.style.wordBreak = 'break-all';
-          urlEl.textContent = entry.url;
+          urlEl.className = 'portal-caption subscription-source';
+          urlEl.textContent = local ? '本地 YAML' : entry.url;
 
           const metaEl = document.createElement('div');
-          metaEl.className = 'mt-1 text-xs';
-          metaEl.style.color = entry.lastError ? '#ef4444' : 'var(--muted)';
+          metaEl.className = 'portal-caption subscription-meta';
+          metaEl.dataset.error = String(Boolean(entry.lastError));
           metaEl.textContent = entry.lastError
             ? `最近错误：${entry.lastError}`
-            : `上次更新：${formatRelativeFromShanghai(entry.updatedAtShanghai)}`;
+            : `${local ? '导入时间' : '上次更新'}：${formatRelativeFromShanghai(entry.updatedAtShanghai)}`;
 
-          row.appendChild(header);
-          row.appendChild(urlEl);
-          row.appendChild(metaEl);
+          details.append(title, urlEl, metaEl);
+          row.append(details, actions);
           subsList.appendChild(row);
         });
       };
@@ -1572,15 +1168,7 @@
 
       const refreshSubscriptionsUI = async () => {
         const data = await loadSubscriptions();
-        if (data.authRequired) {
-          updateBtn.disabled = false;
-        } else if (!data.loaded) {
-          updateBtn.disabled = false;
-        } else if (!data.entries.length) {
-          updateBtn.disabled = true;
-        } else {
-          updateBtn.disabled = false;
-        }
+        updateBtn.disabled = updateBtnIcon.classList.contains('is-spinning') || (data.loaded && !data.entries.length);
         if (data.loaded) {
           lastSubscriptionsSnapshot = {
             entries: data.entries.slice(),
@@ -1611,25 +1199,30 @@
       };
 
       openSubs.addEventListener('click', async () => {
+        const dialog = subsDialog.show();
+        if (!dialog) return;
+        saveSubs.disabled = true;
+        subsEditor.hidden = true;
+        subsList.textContent = '';
+        showFeedback(subsError, '正在读取订阅…');
         const data = await refreshSubscriptionsUI();
+        if (activeDialog !== dialog) return;
         if (data.authRequired) {
+          subsDialog.dismiss();
+          return;
+        }
+        if (!data.loaded) {
+          showFeedback(subsError, '读取订阅失败，请关闭后重试。', true);
           return;
         }
         subsEntries = data.entries.slice();
         subsActiveIndex = data.active;
-        subsEditingIndex = -1;
-        subsInput.value = '';
-        addSubBtn.textContent = '导入';
+        resetSubscriptionEditor();
         renderSubscriptionsList();
-        subsError.style.display = 'none';
-        if (settingsModal.classList.contains('open')) {
-          settingsModal.classList.remove('open');
-          settingsModal.setAttribute('aria-hidden', 'true');
-        }
-        openSubsModal(false);
+        showFeedback(subsError);
+        subsEditor.hidden = false;
+        saveSubs.disabled = false;
       });
-      closeSubs.addEventListener('click', closeSubsModal);
-      subsBackdrop.addEventListener('click', closeSubsModal);
 
       const SUBS_VALIDATE_POLL_INTERVAL_MS = 1000;
       const SUBS_VALIDATE_TIMEOUT_MS = 300000;
@@ -1645,107 +1238,92 @@
             return data;
           }
         }
-        throw new Error('订阅校验超时，请稍后重试，或调大容器环境变量 SUBSCR_VALIDATE_MAX_TIME。');
+        throw new Error('订阅校验超时，请稍后重试。');
       };
 
-      const validateSubscription = async (url) => {
-        let parsedUrl;
-        try {
-          parsedUrl = new URL(url);
-        } catch (err) {
-          throw new Error('订阅链接格式不正确。');
+      const setSubscriptionImporting = (busy, button) => {
+        subsImporting = busy;
+        for (const control of [addSubBtn, uploadSubBtn, saveSubs, closeSubs, subsInput, subsFile]) {
+          control.disabled = busy;
         }
-        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-          throw new Error('订阅链接必须使用 http 或 https。');
-        }
-        const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-        const triggerRes = await fetchWithAuth(`/requests/validations/${requestId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ requestId, url })
-        });
-        if (!triggerRes.ok) {
-          throw new Error('无法提交订阅校验请求，请稍后重试。');
-        }
-        return pollValidateResult(requestId);
+        addSubBtn.textContent = subsEditingIndex >= 0 && !isLocalSubscription(subsEntries[subsEditingIndex].url) ? '更新导入' : '导入';
+        uploadSubBtn.textContent = subsEditingIndex >= 0 && isLocalSubscription(subsEntries[subsEditingIndex].url) ? '上传并替换' : '上传 YAML';
+        if (busy) button.textContent = '校验中…';
+        renderSubscriptionsList();
       };
 
-      const addOrUpdateSubscription = async () => {
-        const url = (subsInput.value || '').trim();
-        if (!url) {
-          subsError.textContent = '请输入订阅链接。';
-          subsError.style.display = 'block';
-          return;
-        }
-        const targetNormalized = normalizeUrlForCompare(url);
-        const duplicatedIndex = subsEntries.findIndex((entry, idx) => {
-          if (subsEditingIndex >= 0 && idx === subsEditingIndex) return false;
-          return normalizeUrlForCompare(entry.url) === targetNormalized;
-        });
-        if (duplicatedIndex >= 0) {
-          subsError.textContent = '该订阅链接已存在，请勿重复导入。';
-          subsError.style.display = 'block';
-          return;
-        }
-        addSubBtn.textContent = '校验中...';
-        addSubBtn.disabled = true;
+      const importSubscription = async (fromFile) => {
+        if (subsImporting || saveSubs.disabled) return;
+        const file = subsFile.files[0];
+        const url = subsInput.value.trim();
+        const button = fromFile ? uploadSubBtn : addSubBtn;
+        const hasDuplicate = (source) => subsEntries.some((entry, idx) => idx !== subsEditingIndex &&
+          (isLocalSubscription(source) ? entry.url === source : normalizeUrlForCompare(entry.url) === normalizeUrlForCompare(source)));
+        setSubscriptionImporting(true, button);
+        showFeedback(subsError, '正在校验订阅…');
         try {
-          const result = await validateSubscription(url);
-          if (!result.ok) {
-            throw new Error(result.message || '订阅校验失败。');
+          if (!fromFile && !/^https?:\/\//i.test(url)) {
+            throw new Error('请输入以 http:// 或 https:// 开头的订阅链接。');
           }
-          const nextEntry = {
-            name: decodeMaybePercentName((result.name || '').trim()) || inferNameFromUrl(url),
-            url,
-            updatedAtShanghai: (result.updatedAtShanghai || result.checkedAtShanghai || '').trim(),
-            subscriptionInfo: (result && typeof result.subscriptionInfo === 'object') ? result.subscriptionInfo : (
-              (subsEditingIndex >= 0 && subsEntries[subsEditingIndex] && subsEntries[subsEditingIndex].url === url)
-                ? (subsEntries[subsEditingIndex].subscriptionInfo || null)
-                : null
-            ),
+          if (!fromFile && hasDuplicate(url)) throw new Error('该订阅链接已存在。');
+          const kind = fromFile ? 'uploads' : 'validations';
+          const payload = fromFile ? { upload: await readYamlUpload(file) } : { url };
+          const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+          const response = await fetchWithAuth(`/requests/${kind}/${requestId}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+          });
+          if (!response.ok) throw new Error('无法提交订阅校验请求，请稍后重试。');
+          const result = await pollValidateResult(requestId);
+          if (!result.ok) throw new Error(result.message || '订阅校验失败。');
+          const source = fromFile ? result.url : url;
+          if (fromFile && !isLocalSubscription(source)) throw new Error('服务器返回的文件信息无效。');
+          if (fromFile && hasDuplicate(source)) throw new Error('相同内容的 YAML 文件已存在。');
+          const entry = {
+            url: source,
+            name: fromFile ? result.name : decodeMaybePercentName(result.name) || inferNameFromUrl(source),
+            updatedAtShanghai: result.updatedAtShanghai || result.checkedAtShanghai || '',
+            subscriptionInfo: result.subscriptionInfo || null,
             lastError: ''
           };
-          if (subsEditingIndex >= 0 && subsEditingIndex < subsEntries.length) {
-            subsEntries[subsEditingIndex] = nextEntry;
+          if (subsEditingIndex >= 0) {
+            subsEntries[subsEditingIndex] = entry;
           } else {
-            subsEntries.push(nextEntry);
-            if (subsEntries.length === 1) {
-              subsActiveIndex = 0;
-            }
+            subsEntries.push(entry);
           }
-          subsEditingIndex = -1;
-          subsInput.value = '';
-          addSubBtn.textContent = '导入';
-          subsError.style.display = 'none';
-          renderSubscriptionsList();
-        } catch (err) {
-          addSubBtn.textContent = subsEditingIndex >= 0 ? '更新导入' : '导入';
-          subsError.textContent = err.message || '订阅校验失败。';
-          subsError.style.display = 'block';
+          resetSubscriptionEditor();
+          showFeedback(subsError, '校验通过，保存后应用。');
+        } catch (error) {
+          showFeedback(subsError, error.message || '订阅校验失败。', true);
         } finally {
-          addSubBtn.disabled = false;
+          setSubscriptionImporting(false, button);
         }
       };
 
-      addSubBtn.addEventListener('click', addOrUpdateSubscription);
+      addSubBtn.addEventListener('click', () => importSubscription(false));
+      uploadSubBtn.addEventListener('click', () => importSubscription(true));
       subsInput.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
-          addOrUpdateSubscription();
+          importSubscription(false);
         }
       });
 
       saveSubs.addEventListener('click', async () => {
         if (!subsEntries.length) {
-          subsError.textContent = '请至少填写一个订阅链接。';
-          subsError.style.display = 'block';
+          showFeedback(subsError, '请至少导入一个订阅链接或本地 YAML 文件。', true);
           return;
         }
         const previousActive = subsActiveIndex;
         const payload = buildSubscriptionsPayload(subsEntries, subsActiveIndex);
         payload.requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-        saveSubs.textContent = '保存中...';
-        saveSubs.disabled = true;
+        const setSaving = (busy) => {
+          subsSaving = busy;
+          saveSubs.disabled = closeSubs.disabled = subsEditor.inert = busy;
+          renderSubscriptionsList();
+        };
+        saveSubs.textContent = '保存中…';
+        showFeedback(subsError);
+        setSaving(true);
         try {
           const res = await fetchWithAuth('/subscriptions.json', {
             method: 'PUT',
@@ -1753,9 +1331,9 @@
             body: JSON.stringify(payload)
           });
           if (!res.ok) throw new Error('save');
-          saveSubs.textContent = '应用中...';
+          saveSubs.textContent = '应用中…';
           await waitForTask(payload.requestId);
-          subsError.style.display = 'none';
+          showFeedback(subsError);
           saveSubs.textContent = '已保存';
           const updated = await refreshSubscriptionsUI();
           subsEntries = updated.entries.slice();
@@ -1776,17 +1354,13 @@
           }
           setTimeout(() => {
             saveSubs.textContent = '保存';
-            saveSubs.disabled = false;
-            subsRequired = false;
-            closeSubs.style.display = '';
-            closeSubsModal();
+            setSaving(false);
+            subsDialog.dismiss();
           }, 800);
         } catch (err) {
-          saveSubs.textContent = '保存失败';
-          saveSubs.disabled = false;
-          subsError.textContent = err.message === 'save' ? '保存失败，请稍后重试。' : err.message;
-          subsError.style.display = 'block';
-          setTimeout(() => { saveSubs.textContent = '保存'; }, 1200);
+          saveSubs.textContent = '保存';
+          setSaving(false);
+          showFeedback(subsError, err.message === 'save' ? '保存失败，请稍后重试。' : err.message, true);
         }
       });
 
@@ -1808,31 +1382,40 @@
       const confirmPasswordInput = document.getElementById('confirm-password');
       const changePassword = document.getElementById('change-password');
       const passwordResult = document.getElementById('password-result');
-      if (!adminAuthEnabled) {
-        passwordForm.hidden = true;
-        passwordForm.style.display = 'none';
-        document.getElementById('password-hint').textContent = '管理密码已关闭，启用后可在此修改密码。';
-      }
+      const settingsContent = document.getElementById('settings-content');
+      const settingsLoad = document.getElementById('settings-load');
+      const settingsError = document.getElementById('settings-error');
+      const proxyUsernameInput = document.getElementById('proxy-username');
+      const proxyPasswordInput = document.getElementById('proxy-password');
+      let settingsSaving = false;
+
+      const settingsDialog = registerDialog(settingsModal, openSettings, closeSettings, settingsBackdrop,
+        () => !settingsSaving && !passwordChangeInProgress, () => {
+          passwordForm.reset();
+          proxyUsernameInput.value = '';
+          proxyPasswordInput.value = '';
+        });
+      const aboutDialog = registerDialog(aboutModal, openAbout, closeAbout, aboutBackdrop, () => true);
+
       passwordForm.addEventListener('submit', async (event) => {
         event.preventDefault();
-        if (changePassword.disabled || !adminAuthEnabled) return;
+        const username = access.readSession()?.username;
+        if (changePassword.disabled || !username) return;
         const currentPassword = currentPasswordInput.value;
         const newPassword = newPasswordInput.value;
         const confirmPassword = confirmPasswordInput.value;
-        passwordResult.style.display = 'block';
-        passwordResult.style.color = 'var(--text)';
         if (newPassword !== confirmPassword) {
-          passwordResult.textContent = '两次输入的新密码不一致。';
+          showFeedback(passwordResult, '两次输入的新密码不一致。', true);
           return;
         }
         const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-        changePassword.disabled = true;
+        changePassword.disabled = saveSettings.disabled = closeSettings.disabled = true;
         passwordChangeInProgress = true;
-        changePassword.textContent = '修改中...';
-        passwordResult.textContent = '正在保存密码...';
+        changePassword.textContent = '修改中…';
+        showFeedback(passwordResult, '正在保存密码…');
         try {
           const response = await fetch(`/requests/password/${requestId}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json', ...passwordHeader(currentPassword) },
+            method: 'PUT', headers: { 'Content-Type': 'application/json', ...basicAuth(username, currentPassword) },
             body: JSON.stringify({ currentPassword, newPassword, confirmPassword })
           });
           if (response.status === 401 || response.status === 403) throw new Error('当前密码不正确。');
@@ -1844,7 +1427,7 @@
             // Credentials change during processing; either password may still be active.
             for (const password of [newPassword, currentPassword]) {
               const result = await fetch(`/tasks/${requestId}.json?t=${Date.now()}`, {
-                cache: 'no-store', headers: passwordHeader(password)
+                cache: 'no-store', headers: basicAuth(username, password)
               });
               if (!result.ok) continue;
               const task = await result.json();
@@ -1855,76 +1438,17 @@
             if (completed) break;
           }
           if (!completed) throw new Error('等待密码修改超时，请使用新密码重新登录确认。');
-          sessionStorage.setItem(adminStorageKey, newPassword);
+          access.remember(username, newPassword);
           passwordForm.reset();
-          passwordResult.textContent = '密码已修改并保存。';
-          passwordResult.style.color = '#16a34a';
+          showFeedback(passwordResult, '密码已修改并保存。');
         } catch (error) {
-          passwordResult.textContent = error.message || '密码修改失败，请稍后重试。';
-          passwordResult.style.color = '#ef4444';
+          showFeedback(passwordResult, error.message || '密码修改失败，请稍后重试。', true);
         } finally {
           passwordChangeInProgress = false;
-          changePassword.disabled = false;
+          changePassword.disabled = saveSettings.disabled = closeSettings.disabled = false;
           changePassword.textContent = '修改密码';
         }
       });
-
-      const openModal = () => {
-        passwordForm.reset();
-        passwordResult.style.display = 'none';
-        document.getElementById('settings-error').style.display = 'none';
-        settingsModal.classList.add('open');
-        settingsModal.setAttribute('aria-hidden', 'false');
-      };
-      const closeModal = () => {
-        settingsModal.classList.remove('open');
-        settingsModal.setAttribute('aria-hidden', 'true');
-        passwordForm.reset();
-        document.getElementById('proxy-username').value = '';
-        document.getElementById('proxy-password').value = '';
-      };
-
-      const loadSettings = async () => {
-        let autoEnabled = true;
-        let builtinEnabled = false;
-        let intervalMinutes = updateIntervalSec ? updateIntervalSec / 60 : 0;
-        let authRequired = false;
-        let proxyUsername = '';
-        let proxyPassword = '';
-        try {
-          const res = await fetchWithAuth(`/settings.json?t=${Date.now()}`, { cache: 'no-store' });
-          if (res.status === 401 || res.status === 403) throw new Error('auth');
-          if (res.ok) {
-            const data = await res.json();
-            proxyUsername = typeof data.proxyUsername === 'string' ? data.proxyUsername : '';
-            proxyPassword = typeof data.proxyPassword === 'string' ? data.proxyPassword : '';
-            if (typeof data.autoEnabled === 'boolean') {
-              autoEnabled = data.autoEnabled;
-            }
-            if (typeof data.intervalMinutes === 'number') {
-              intervalMinutes = data.intervalMinutes;
-            }
-            if (typeof data.builtinEnabled === 'boolean') {
-              builtinEnabled = data.builtinEnabled;
-            }
-          }
-        } catch (err) {
-          if (err && err.message === 'auth') {
-            authRequired = true;
-          }
-          // keep defaults
-        }
-        if (authRequired) {
-          return { authRequired: true };
-        }
-        autoEnabledInput.checked = autoEnabled;
-        builtinEnabledInput.checked = builtinEnabled;
-        autoMinutesInput.value = intervalMinutes ? String(intervalMinutes) : '0';
-        autoMinutesInput.disabled = !autoEnabled;
-        document.getElementById('proxy-username').value = proxyUsername;
-        document.getElementById('proxy-password').value = proxyPassword;
-        return { authRequired: false };
-      };
 
       autoEnabledInput.addEventListener('change', () => {
         autoMinutesInput.disabled = !autoEnabledInput.checked;
@@ -1934,111 +1458,95 @@
       });
 
       saveSettings.addEventListener('click', async () => {
-        const settingsError = document.getElementById('settings-error');
-        settingsError.style.display = 'none';
+        showFeedback(settingsError);
         const payload = {
           requestId: `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`,
           autoEnabled: Boolean(autoEnabledInput.checked),
           intervalMinutes: Number(autoMinutesInput.value || 0),
           builtinEnabled: Boolean(builtinEnabledInput.checked),
-          proxyUsername: document.getElementById('proxy-username').value,
-          proxyPassword: document.getElementById('proxy-password').value
+          proxyUsername: proxyUsernameInput.value,
+          proxyPassword: proxyPasswordInput.value
         };
         if (Boolean(payload.proxyUsername) !== Boolean(payload.proxyPassword) || payload.proxyUsername.includes(':')) {
-          settingsError.textContent = '请同时填写代理用户名和密码，或同时留空。用户名不能包含冒号。';
-          settingsError.style.display = 'block';
+          showFeedback(settingsError, '请同时填写代理用户名和密码，或同时留空。用户名不能包含冒号。', true);
           return;
         }
         if (payload.autoEnabled && (!Number.isFinite(payload.intervalMinutes) || payload.intervalMinutes < 1 || payload.intervalMinutes > 10080)) {
-          autoMinutesInput.setCustomValidity('更新间隔应为 1 到 10080 分钟');
-          autoMinutesInput.reportValidity();
+          showFeedback(settingsError, '更新间隔应为 1 到 10080 分钟。', true);
+          autoMinutesInput.focus();
           return;
         }
-        autoMinutesInput.setCustomValidity('');
-        saveSettings.textContent = '保存中...';
-        saveSettings.disabled = true;
+        settingsSaving = true;
+        saveSettings.textContent = '保存中…';
+        saveSettings.disabled = closeSettings.disabled = settingsContent.inert = true;
         try {
           const res = await fetchWithAuth('/settings.json', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
           });
-          if (!res.ok) throw new Error('save');
-          saveSettings.textContent = '应用中...';
+          if (!res.ok) throw new Error('无法保存设置，请重试。');
+          saveSettings.textContent = '应用中…';
           await waitForTask(payload.requestId);
           saveSettings.textContent = '已保存';
-          saveSettings.title = '';
-          setTimeout(() => {
-            saveSettings.textContent = '保存';
-            saveSettings.disabled = false;
-            closeModal();
-          }, 800);
+          await sleep(800);
+          settingsSaving = false;
+          settingsDialog.dismiss();
         } catch (err) {
-          saveSettings.textContent = '保存失败';
-          saveSettings.title = err.message || '保存失败';
-          settingsError.textContent = err.message || '保存失败，请重试';
-          settingsError.style.display = 'block';
-          await loadSettings();
-          setTimeout(() => {
-            saveSettings.textContent = '保存';
-            saveSettings.disabled = false;
-          }, 1200);
+          showFeedback(settingsError, err.message || '保存失败，请重试。', true);
+        } finally {
+          settingsSaving = false;
+          saveSettings.textContent = '保存设置';
+          saveSettings.disabled = closeSettings.disabled = settingsContent.inert = false;
         }
       });
 
       openSettings.addEventListener('click', async () => {
-        const settingsState = await loadSettings();
-        if (settingsState.authRequired) {
-          return;
-        }
-        openModal();
-      });
-      closeSettings.addEventListener('click', closeModal);
-      settingsBackdrop.addEventListener('click', closeModal);
-
-      const openAboutModal = async () => {
-        aboutModal.classList.add('open');
-        aboutModal.setAttribute('aria-hidden', 'false');
-        await Promise.all([fetchCoreVersion(), fetchProjectVersion()]);
-      };
-      const closeAboutModal = () => {
-        aboutModal.classList.remove('open');
-        aboutModal.setAttribute('aria-hidden', 'true');
-      };
-
-      openAbout.addEventListener('click', openAboutModal);
-      closeAbout.addEventListener('click', closeAboutModal);
-      aboutBackdrop.addEventListener('click', closeAboutModal);
-
-      const ensureAdminSession = async () => {
-        if (!adminAuthEnabled) return;
-        while (true) {
+        const dialog = settingsDialog.show();
+        if (!dialog) return;
+        saveSettings.disabled = true;
+        settingsContent.hidden = true;
+        showFeedback(settingsError);
+        showFeedback(passwordResult);
+        showFeedback(settingsLoad, '正在读取设置…');
+        try {
           const res = await fetchWithAuth(`/settings.json?t=${Date.now()}`, { cache: 'no-store' });
-          if (res.status !== 401 && res.status !== 403) {
-            return;
-          }
+          if (!res.ok) throw new Error('settings');
+          const data = await res.json();
+          if (activeDialog !== dialog) return;
+          autoEnabledInput.checked = data.autoEnabled !== false;
+          builtinEnabledInput.checked = data.builtinEnabled === true;
+          autoMinutesInput.value = typeof data.intervalMinutes === 'number' ? data.intervalMinutes : updateIntervalSec / 60;
+          autoMinutesInput.disabled = !autoEnabledInput.checked;
+          proxyUsernameInput.value = typeof data.proxyUsername === 'string' ? data.proxyUsername : '';
+          proxyPasswordInput.value = typeof data.proxyPassword === 'string' ? data.proxyPassword : '';
+          showFeedback(settingsLoad);
+          settingsContent.hidden = false;
+          saveSettings.disabled = false;
+        } catch {
+          if (activeDialog === dialog) showFeedback(settingsLoad, '读取设置失败，请关闭后重试。', true);
         }
-      };
+      });
+
+      openAbout.addEventListener('click', () => {
+        if (!aboutDialog.show()) return;
+        aboutProjectVersionEl.textContent = aboutCoreVersionEl.textContent = '读取中…';
+        fetchCoreVersion();
+        fetchProjectVersion();
+      });
 
       const bootstrapPortal = async () => {
-        await ensureAdminSession();
-        const connection = await fetchWithAuth(`/connection.json?t=${Date.now()}`, { cache: 'no-store' });
-        if (!connection.ok) throw new Error('无法读取连接信息');
+        await access.waitForSetup();
+        const connection = await fetchWithAuth('/connection.json', { cache: 'no-store' });
+        if (!connection.ok) throw new Error('无法读取连接信息，请刷新页面。');
         secret = (await connection.json()).secret || '';
         fillConnectionInfo();
-        const data = await bootstrapSubscriptionsUI();
-        if (data.loaded && !data.authRequired && !data.entries.length) {
-          subsEntries = [];
-          subsActiveIndex = 0;
-          subsEditingIndex = -1;
-          subsInput.value = '';
-          addSubBtn.textContent = '导入';
-          renderSubscriptionsList();
-          subsError.textContent = '需要先填写订阅链接才能初始化。';
-          subsError.style.display = 'block';
-          openSubsModal(true);
-        }
         applyLatencyModeUI();
+        renderLatencyItems();
+        access.showApp();
+        triggerLatencyRefresh();
+        setInterval(triggerLatencyRefresh, 30000);
+        const data = await bootstrapSubscriptionsUI();
         if (data && data.loaded) {
           lastSubscriptionsSnapshot = {
             entries: data.entries.slice(),
@@ -2058,15 +1566,14 @@
             }
           }
         }
-        fetchCoreVersion();
-        triggerLatencyRefresh();
         setInterval(fetchStatus, 30000);
         setInterval(fetchSubscriptionInfo, 30000);
         setInterval(renderLastUpdate, 60000);
-        setInterval(triggerLatencyRefresh, 30000);
       };
 
-      bootstrapPortal().catch((error) => { lastUpdateEl.textContent = error.message || '初始化失败，请刷新页面'; });
+      bootstrapPortal().catch(() => {
+        document.getElementById('access-description').textContent = '无法读取配置，请刷新页面后重试。';
+      });
     </script>
   </body>
 </html>

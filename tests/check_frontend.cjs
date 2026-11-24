@@ -9,6 +9,10 @@ for (const [index, match] of [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/sc
     if (result.status !== 0) throw new Error(result.stderr);
   } else new vm.Script(match[2], {filename: `portal-script-${index}.js`});
 }
+const setup = spawnSync(process.execPath, ['--check', '--input-type=module'], {
+  input: fs.readFileSync('portal/setup.js', 'utf8'), encoding: 'utf8'
+});
+if (setup.status !== 0) throw new Error(setup.stderr);
 console.log('Frontend scripts passed syntax checks');
 
 const assert = require('node:assert/strict');

@@ -17,66 +17,85 @@ class PasswordTests(unittest.TestCase):
         self.directory = Path(self.temporary.name)
         self.auth = self.directory / '.htpasswd'
 
+    def initialize(self, password='', username='admin'):
+        return tool.initialize(self.directory, self.auth, username, password)
+
     def rotate(self, current, new, confirm=None):
         return tool.change(self.directory, self.auth, {'currentPassword': current, 'newPassword': new,
-                           'confirmPassword': new if confirm is None else confirm}, True)
+                           'confirmPassword': new if confirm is None else confirm})
 
     def snapshot(self):
         return {path.name: path.read_bytes() for path in self.directory.iterdir()}
 
-    def test_custom_password_survives_environment_and_environment_can_reset(self):
-        tool.initialize(self.directory, self.auth, 'initial-environment')
+    def confirm_password(self, password):
+        stored = tool.read_env(self.directory)[tool.PASSWORD_HASH]
+        self.assertEqual(stored, tool.password_hash(password, stored.split('$')[2]))
+        self.assertNotIn(password, (self.directory / '.env').read_text())
+
+    def test_custom_password_survives_unchanged_environment_and_changed_environment_resets(self):
+        self.assertTrue(self.initialize('initial-environment', 'operator')['accountReady'])
         self.rotate('initial-environment', ' 新密码 with spaces ')
-        result = tool.initialize(self.directory, self.auth, 'initial-environment')
-        self.assertEqual(result, {'password': ' 新密码 with spaces ', 'source': 'custom'})
-        self.assertEqual(tool.initialize(self.directory, self.auth, 'reset-environment')['password'], 'reset-environment')
+        self.initialize('initial-environment', 'operator')
+        self.confirm_password(' 新密码 with spaces ')
+        self.initialize('reset-environment', 'operator')
+        self.confirm_password('reset-environment')
 
-    def test_generated_password_is_distinguished_from_changed_password(self):
-        result = tool.initialize(self.directory, self.auth, '')
-        self.assertEqual(result['source'], 'generated')
-        self.assertEqual(tool.initialize(self.directory, self.auth, '')['password'], result['password'])
-        self.rotate(result['password'], '1234')
-        self.assertEqual(tool.initialize(self.directory, self.auth, ''), {'password': '1234', 'source': 'custom'})
-        self.assertEqual((self.directory / 'portal-admin.key').stat().st_mode & 0o777, 0o600)
-        self.assertEqual((self.directory / 'portal-auth.json').stat().st_mode & 0o777, 0o600)
+    def test_pending_setup_persists_only_after_valid_configuration(self):
+        result = self.initialize()
+        self.assertFalse(result['accountReady'])
+        pending = tool.read_env(self.directory)
+        self.assertEqual(pending, {})
+        self.assertFalse(self.auth.exists())
+        self.initialize()
+        self.assertEqual(tool.read_env(self.directory), pending)
+        credentials = {'username': 'operator', 'password': 'change-me', 'confirmation': 'change-me'}
+        with self.assertRaisesRegex(ValueError, '有效的订阅'):
+            tool.complete(self.directory, self.auth, credentials)
+        url = "https://example.test/download?q='a'&token=${abc}"
+        (self.directory / 'subscriptions.json').write_text(json.dumps({'active': 0, 'urls': [url]}))
+        tool.complete(self.directory, self.auth, credentials)
+        state = tool.read_env(self.directory)
+        self.assertEqual(state[tool.USERNAME], 'operator')
+        self.assertEqual(state[tool.SUBSCRIPTIONS], {'active': 0, 'urls': [url]})
+        self.confirm_password('change-me')
+        self.assertEqual((self.directory / '.env').stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.auth.stat().st_mode & 0o777, 0o640)
+        (self.directory / 'subscriptions.json').unlink()
+        self.assertTrue(self.initialize()['accountReady'])
+        self.assertEqual(json.loads((self.directory / 'subscriptions.json').read_text())['urls'], [url])
 
-    def test_legacy_saved_password_source_is_migrated(self):
+    def test_legacy_generated_password_requires_setup_and_custom_password_is_migrated(self):
         key = self.directory / 'portal-admin.key'
         key.write_text('f' * 48 + '\n')
-        self.assertEqual(tool.initialize(self.directory, self.auth, '')['source'], 'generated')
-        (self.directory / 'portal-auth.json').unlink()
+        self.assertFalse(self.initialize()['accountReady'])
         key.write_text('manually-saved-password\n')
-        self.assertEqual(tool.initialize(self.directory, self.auth, '')['source'], 'custom')
+        self.assertTrue(self.initialize()['accountReady'])
+        self.confirm_password('manually-saved-password')
 
     def test_invalid_requests_preserve_password_and_credentials(self):
-        tool.initialize(self.directory, self.auth, 'current')
+        self.initialize('current-password')
         original = self.snapshot()
-        for current, new, confirm in [('wrong', 'new', 'new'), ('current', 'new', 'different'),
-                                      ('current', '', ''), ('current', 'a\nb', 'a\nb'),
-                                      ('current', 'a\0b', 'a\0b'), ('current', 'a' * 129, 'a' * 129)]:
+        for current, new, confirm in [('wrong', 'new', 'new'), ('current-password', 'new', 'different'),
+                                      ('current-password', '', ''), ('current-password', 'a\nb', 'a\nb'),
+                                      ('current-password', 'a\0b', 'a\0b'), ('current-password', 'a' * 129, 'a' * 129),
+                                      ('current-password', '中' * 100, '中' * 100)]:
             with self.assertRaises(ValueError):
                 self.rotate(current, new, confirm)
             self.assertEqual(self.snapshot(), original)
-        with self.assertRaises(ValueError):
-            tool.change(self.directory, self.auth, {}, False)
-        self.assertEqual(self.snapshot(), original)
 
-    def test_failed_authentication_file_replace_rolls_back_all_files(self):
-        tool.initialize(self.directory, self.auth, 'current')
+    def test_failed_environment_replace_rolls_back_authentication_file(self):
+        self.initialize('current-password')
         original = self.snapshot()
         replace = tool.os.replace
-        failed = False
+        target_env = self.directory / '.env'
 
-        def fail_once(source, target):
-            nonlocal failed
-            if target == self.auth and not failed:
-                failed = True
+        def fail_on_env(source, target):
+            if target == target_env:
                 raise OSError('simulated replacement failure')
             return replace(source, target)
 
-        with patch.object(tool.os, 'replace', side_effect=fail_once), self.assertRaises(OSError):
-            self.rotate('current', 'new')
+        with patch.object(tool.os, 'replace', side_effect=fail_on_env), self.assertRaises(OSError):
+            self.rotate('current-password', 'new-password')
         self.assertEqual(self.snapshot(), original)
 
 

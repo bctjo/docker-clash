@@ -32,8 +32,7 @@ lint_compose_config:
     - if: $CI_COMMIT_BRANCH
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   script:
-    - docker compose -f docker-compose.yml config -q
-    - docker compose -f docker-compose.dev.yml config -q
+    - docker compose config -q
 
 build_image:
   stage: build

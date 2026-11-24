@@ -38,10 +38,12 @@ def eventually(check, timeout=45):
 with tempfile.TemporaryDirectory(prefix='clash-integration-') as directory:
     data = Path(directory) / 'data'
     data.mkdir()
+    legacy_secret = 'legacy-api-key-before-upgrade'
+    (data / 'portal.json').write_text(json.dumps({'secret': legacy_secret}))
     container = docker('run', '-d', '--name', 'clash-test-' + uuid.uuid4().hex[:8],
                        '-p', '127.0.0.1::9090', '-e', 'DASH_PORT=19097',
                        '-v', f'{data}:/root/.config/clash', '-v', f'{ROOT / "tests"}:/opt/tests:ro',
-                       '-e', 'PORTAL_AUTH_ENABLED=true', '-e', f'PORTAL_ADMIN_KEY={PASSWORD}', '-e', 'SUBSCR_RETRY=0',
+                       '-e', f'PORTAL_ADMIN_KEY={PASSWORD}', '-e', 'SUBSCR_RETRY=0',
                        '-e', 'SUBSCR_DOWNLOAD_MAX_TIME=3', '-e', 'SUBSCR_CONNECT_TIMEOUT=1',
                        '-e', 'GEODATA_AUTO_UPDATE=false',
                        *sum((['-e', f'PROXY_TEST_URL_{site}=http://127.0.0.1:18888/subscription.yaml'] for site in ['YOUTUBE', 'GITHUB', 'TMDB', 'BAIDU']), []), '-e', 'BUILTIN_RULE_FILE=/opt/tests/minimal-template.yaml', IMAGE)
@@ -85,35 +87,56 @@ with tempfile.TemporaryDirectory(prefix='clash-integration-') as directory:
             docker('exec', container, 'python3', '-c', "from pathlib import Path; Path('/tmp/subscription-mode').write_text(" + repr(value) + ")")
 
         eventually(lambda: request('/')[0] == 200)
+        setup = json.loads(request('/setup/status.json', auth=False)[1])
+        assert setup['state'] == 'pending' and not setup['needsAccount'] and setup['needsSubscription']
         for path in ['/connection.json', '/subscriptions.json', '/settings.json', '/subscription-validate.json', '/requests/updates/test', '/tasks/test.json']:
-            assert request(path, auth=False)[0] in (403, 404), path
+            assert request(path, auth=False)[0] == request(path)[0] == 403, path
         public_config = request('/config.js', auth=False)[1].decode()
         assert 'secret' not in public_config.lower()
+        docker('exec', '-d', container, 'python3', '/opt/tests/fixture_server.py')
+        url = 'http://127.0.0.1:18888/subscription.yaml'
+        initial_id = str(uuid.uuid4())
+        assert request(f'/setup/requests/{initial_id}', 'PUT', {'url': url}, auth=False)[0] == 403
+        assert request(f'/setup/requests/{initial_id}', 'PUT', {'url': url})[0] in (201, 204)
+
+        def initial_result():
+            code, body = request(f'/setup/results/{initial_id}.json')
+            if code == 200:
+                value = json.loads(body)
+                return value if value['state'] in ('success', 'failed') else None
+            return None
+
+        assert eventually(initial_result)['state'] == 'success'
         secret = read('/connection.json')['secret']
         assert len(secret) >= 32
+        assert secret != legacy_secret
         assert read('/settings.json')['builtinEnabled'] is False
         assert (data / 'portal.json').stat().st_mode & 0o777 == 0o600
         assert (data / 'Country.mmdb').stat().st_size > 0
         print('PASS: authentication, secret isolation, default settings, offline geodata')
 
-        if os.environ.get('RUN_BROWSER_TESTS') == '1':
-            subprocess.run(['node', str(ROOT / 'tests/browser.cjs')], check=True,
-                           env={**os.environ, 'PORTAL_URL': portal, 'PORTAL_PASSWORD': PASSWORD, 'BROWSER_SETUP_ONLY': '1'})
-        docker('exec', '-d', container, 'python3', '/opt/tests/fixture_server.py')
-        url = 'http://127.0.0.1:18888/subscription.yaml'
         valid = submit('validations', {'url': url})
         assert eventually(lambda: result(valid))['ok'] is True
         for suffix in ('uri', 'nodes', 'broken'):
             task = submit('validations', {'url': 'http://127.0.0.1:18888/' + suffix})
             assert eventually(lambda: result(task))['ok'] is False
-        initial_id = str(uuid.uuid4())
-        assert request('/subscriptions.json', 'PUT', {'requestId': initial_id, 'active': 0, 'urls': [url]})[0] in (201, 204)
-        assert eventually(lambda: result(initial_id))['state'] == 'success'
         eventually(lambda: request('/version', base=api, bearer=secret)[0] == 200)
         # Only Portal is published, with a custom internal core port. All API
         # authentication and dashboard assets must work through this one port.
         assert request('/version', auth=False)[0] == 401
         assert request('/version', bearer='wrong-secret')[0] == 401
+        assert request('/configs', bearer=legacy_secret)[0] == 401
+        assert request('/configs', 'PATCH', {'mode': 'global'}, auth=False)[0] == 401
+        assert request('/configs', 'PATCH', {'mode': 'global'}, bearer=legacy_secret)[0] == 401
+        docker('exec', container, 'python3', '-c', '''
+import socket
+with socket.create_connection(('127.0.0.1', 19097), timeout=2):
+    pass
+address = socket.gethostbyname(socket.gethostname())
+with socket.socket() as client:
+    client.settimeout(2)
+    assert client.connect_ex((address, 19097)) != 0, 'core API listens outside loopback'
+''')
         for panel in ('metacubexd', 'zashboard', 'yacd'):
             code, body = request(f'/ui/{panel}/', auth=False)
             assert code == 200 and b'<html' in body.lower(), panel
